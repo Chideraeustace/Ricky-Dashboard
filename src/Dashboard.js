@@ -31,7 +31,7 @@ function Dashboard() {
         setFilteredTransactions(transactionsData);
         setLoading(false);
       } catch (err) {
-        setError('Failed to fetch transactions');
+        setError('Failed to fetch transactionss');
         setLoading(false);
       }
     };
