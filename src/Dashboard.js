@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
-import { collection, getDocs } from 'firebase/firestore';
-import { db } from './firebase';
-import { Parser } from '@json2csv/plainjs';
+import { useState, useEffect } from "react";
+import { collection, getDocs } from "firebase/firestore";
+import { db } from "./firebase";
+import { Parser } from "@json2csv/plainjs";
 import {
   Download,
   Search,
@@ -9,43 +9,61 @@ import {
   XCircle,
   BarChart2,
   List,
-} from 'lucide-react';
+} from "lucide-react";
 
 function Dashboard() {
   const [transactions, setTransactions] = useState([]);
   const [filteredTransactions, setFilteredTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [activeTab, setActiveTab] = useState('all');
-  const [rSwitchFilter, setRSwitchFilter] = useState('');
+  const [searchTerm, setSearchTerm] = useState("");
+  const [activeTab, setActiveTab] = useState("all");
+  const [rSwitchFilter, setRSwitchFilter] = useState("");
 
   // Fetch transactions from Firestore
   useEffect(() => {
     const fetchTransactions = async () => {
       try {
-        const querySnapshot = await getDocs(collection(db, 'teller_response'));
+        const querySnapshot = await getDocs(collection(db, "teller_response"));
         const transactionsData = querySnapshot.docs.map((doc) => ({
           id: doc.id,
           ...doc.data(),
         }));
-        setTransactions(transactionsData);
-        setFilteredTransactions(transactionsData);
+        // Sort transactions by createdAt in descending order
+        const sortedTransactions = transactionsData.sort((a, b) => {
+          const dateA = a.createdAt ? a.createdAt.toDate() : new Date(0);
+          const dateB = b.createdAt ? b.createdAt.toDate() : new Date(0);
+          return dateB - dateA; // Most recent first
+        });
+        setTransactions(sortedTransactions);
+        setFilteredTransactions(sortedTransactions);
         setLoading(false);
       } catch (err) {
-        setError('Failed to fetch transactions');
+        setError("Failed to fetch transactions");
         setLoading(false);
       }
     };
     fetchTransactions();
   }, []);
 
-  // Filter transactions based on search term, tab status, and r_switch
+  // Filter transactions based on search term, tab status, r_switch, and recent tab
   useEffect(() => {
     let filtered = transactions;
 
-    // Filter by status (tab)
-    if (activeTab !== 'all') {
+    // Filter by status (tab) or recent transactions
+    if (activeTab === "recent") {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0); // Start of current day
+      const tomorrow = new Date(today);
+      tomorrow.setDate(today.getDate() + 1); // Start of next day
+      filtered = filtered.filter(
+        (transaction) =>
+          transaction.createdAt &&
+          transaction.status?.toLowerCase() === "approved" &&
+          transaction.createdAt.toDate() >= today &&
+          transaction.createdAt.toDate() < tomorrow
+      );
+    } else if (activeTab !== "all") {
       filtered = filtered.filter(
         (transaction) => transaction.status?.toLowerCase() === activeTab
       );
@@ -68,29 +86,54 @@ function Dashboard() {
       );
     }
 
-    setFilteredTransactions(filtered);
+    // Sort filtered transactions by createdAt in descending order
+    const sortedFiltered = [...filtered].sort((a, b) => {
+      const dateA = a.createdAt ? a.createdAt.toDate() : new Date(0);
+      const dateB = b.createdAt ? b.createdAt.toDate() : new Date(0);
+      return dateB - dateA; // Most recent first
+    });
+
+    setFilteredTransactions(sortedFiltered);
   }, [searchTerm, transactions, activeTab, rSwitchFilter]);
 
   // Format timestamp
   const formatDate = (timestamp) => {
-    if (!timestamp) return 'N/A';
-    return new Date(timestamp.toDate()).toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      timeZoneName: 'short',
+    if (!timestamp) return "N/A";
+    return new Date(timestamp.toDate()).toLocaleString("en-US", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      timeZoneName: "short",
     });
   };
 
-  // Download approved transactions filtered by r_switch as CSV
-  const downloadCSV = (rSwitch = '') => {
+  // Download transactions as CSV (approved or recent approved based on tab)
+  const downloadCSV = (rSwitch = "") => {
     try {
-      let dataToExport = transactions.filter(
-        (t) => t.status?.toLowerCase() === 'approved'
-      );
+      let dataToExport = transactions;
+
+      // If recent tab is active, only include approved transactions from today
+      if (activeTab === "recent") {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0); // Start of current day
+        const tomorrow = new Date(today);
+        tomorrow.setDate(today.getDate() + 1); // Start of next day
+        dataToExport = dataToExport.filter(
+          (transaction) =>
+            transaction.createdAt &&
+            transaction.status?.toLowerCase() === "approved" &&
+            transaction.createdAt.toDate() >= today &&
+            transaction.createdAt.toDate() < tomorrow
+        );
+      } else {
+        // Otherwise, filter by approved status
+        dataToExport = dataToExport.filter(
+          (t) => t.status?.toLowerCase() === "approved"
+        );
+      }
 
       if (rSwitch) {
         dataToExport = dataToExport.filter(
@@ -99,21 +142,25 @@ function Dashboard() {
       }
 
       if (dataToExport.length === 0) {
-        alert('No approved transactions found for the selected r_switch.');
+        alert(
+          activeTab === "recent"
+            ? "No approved transactions from today found for the selected r_switch."
+            : "No approved transactions found for the selected r_switch."
+        );
         return;
       }
 
       const parser = new Parser({
         fields: [
-          'code',
-          'createdAt',
-          'customer_id',
-          'desc',
-          'r_switch',
-          'reason',
-          'status',
-          'subscriber_number',
-          'transaction_id',
+          "code",
+          "createdAt",
+          "customer_id",
+          "desc",
+          "r_switch",
+          "reason",
+          "status",
+          "subscriber_number",
+          "transaction_id",
         ],
         transforms: [
           (item) => ({
@@ -123,30 +170,35 @@ function Dashboard() {
         ],
       });
       const csv = parser.parse(dataToExport);
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-      const link = document.createElement('a');
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
-      link.download = rSwitch
-        ? `approved_transactions_${rSwitch}.csv`
-        : 'approved_transactions.csv';
+      link.download =
+        activeTab === "recent"
+          ? rSwitch
+            ? `recent_approved_transactions_${rSwitch}.csv`
+            : "recent_approved_transactions.csv"
+          : rSwitch
+          ? `approved_transactions_${rSwitch}.csv`
+          : "approved_transactions.csv";
       link.click();
       URL.revokeObjectURL(link.href);
     } catch (err) {
-      console.error('Error generating CSV:', err);
-      alert('Failed to download CSV');
+      console.error("Error generating CSV:", err);
+      alert("Failed to download CSV");
     }
   };
 
   const statusClass = (status) => {
     switch (status) {
-      case 'approved':
-        return 'bg-green-100 text-green-800 border-green-200';
-      case 'failed':
-        return 'bg-red-100 text-red-800 border-red-200';
-      case 'declined':
-        return 'bg-yellow-100 text-yellow-800 border-yellow-200';
+      case "approved":
+        return "bg-green-100 text-green-800 border-green-200";
+      case "failed":
+        return "bg-red-100 text-red-800 border-red-200";
+      case "declined":
+        return "bg-yellow-100 text-yellow-800 border-yellow-200";
       default:
-        return 'bg-gray-100 text-gray-800 border-gray-200';
+        return "bg-gray-100 text-gray-800 border-gray-200";
     }
   };
 
@@ -181,27 +233,41 @@ function Dashboard() {
             <button
               onClick={() => downloadCSV(rSwitchFilter)}
               className="flex items-center justify-center gap-1 bg-blue-600 text-white px-3 py-2 rounded-lg shadow-md hover:bg-blue-700 transition-colors text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed w-full sm:w-auto"
-              disabled={transactions.filter((t) => t.status?.toLowerCase() === 'approved').length === 0}
+              disabled={
+                activeTab === "recent"
+                  ? filteredTransactions.length === 0
+                  : transactions.filter(
+                      (t) => t.status?.toLowerCase() === "approved"
+                    ).length === 0
+              }
             >
               <Download className="w-4 h-4" />
-              <span className="hidden sm:inline">Download Approved CSV</span>
+              <span className="hidden sm:inline">
+                {activeTab === "recent"
+                  ? "Download Today's Approved CSV"
+                  : "Download Approved CSV"}
+              </span>
               <span className="sm:hidden">Download</span>
             </button>
           </div>
         </div>
 
         <div className="flex overflow-x-auto border-b border-gray-200 scrollbar-thin">
-          {['all', 'approved', 'failed', 'declined'].map((tab) => (
+          {["all", "recent", "approved", "failed", "declined"].map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
               className={`px-3 py-2 text-xs sm:text-sm font-medium capitalize border-b-2 whitespace-nowrap ${
                 activeTab === tab
-                  ? 'border-blue-500 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  ? "border-blue-500 text-blue-600"
+                  : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
               }`}
             >
-              {tab === 'all' ? 'All' : tab}
+              {tab === "all"
+                ? "All"
+                : tab === "recent"
+                ? "Today's Approved"
+                : tab}
             </button>
           ))}
         </div>
@@ -220,7 +286,7 @@ function Dashboard() {
         />
         {searchTerm && (
           <button
-            onClick={() => setSearchTerm('')}
+            onClick={() => setSearchTerm("")}
             className="p-2 text-gray-500 hover:text-gray-700 transition-colors"
           >
             <XCircle className="w-4 h-4 sm:w-5 sm:h-5" />
@@ -236,7 +302,9 @@ function Dashboard() {
       ) : error ? (
         <div className="flex flex-col justify-center items-center h-64 text-red-500">
           <XCircle className="w-10 h-10 sm:w-12 sm:h-12" />
-          <p className="mt-3 text-sm sm:text-lg text-center font-medium">{error}</p>
+          <p className="mt-3 text-sm sm:text-lg text-center font-medium">
+            {error}
+          </p>
         </div>
       ) : filteredTransactions.length === 0 ? (
         <div className="text-center py-8 sm:py-10 text-gray-500">
@@ -265,17 +333,31 @@ function Dashboard() {
                     key={transaction.id}
                     className="hover:bg-gray-50 transition-colors"
                   >
-                    <td className="py-3 px-4 whitespace-nowrap">{formatDate(transaction.createdAt)}</td>
-                    <td className="py-3 px-4 whitespace-nowrap">{transaction.customer_id || 'N/A'}</td>
-                    <td className="py-3 px-4 whitespace-nowrap">{transaction.r_switch || 'N/A'}</td>
-                    <td className="py-3 px-4">{transaction.desc || 'N/A'}</td>
                     <td className="py-3 px-4 whitespace-nowrap">
-                      <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border ${statusClass(transaction.status)}`}>
-                        {transaction.status || 'N/A'}
+                      {formatDate(transaction.createdAt)}
+                    </td>
+                    <td className="py-3 px-4 whitespace-nowrap">
+                      {transaction.customer_id || "N/A"}
+                    </td>
+                    <td className="py-3 px-4 whitespace-nowrap">
+                      {transaction.r_switch || "N/A"}
+                    </td>
+                    <td className="py-3 px-4">{transaction.desc || "N/A"}</td>
+                    <td className="py-3 px-4 whitespace-nowrap">
+                      <span
+                        className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border ${statusClass(
+                          transaction.status
+                        )}`}
+                      >
+                        {transaction.status || "N/A"}
                       </span>
                     </td>
-                    <td className="py-3 px-4 whitespace-nowrap">{transaction.subscriber_number || 'N/A'}</td>
-                    <td className="py-3 px-4 whitespace-nowrap">{transaction.transaction_id || 'N/A'}</td>
+                    <td className="py-3 px-4 whitespace-nowrap">
+                      {transaction.subscriber_number || "N/A"}
+                    </td>
+                    <td className="py-3 px-4 whitespace-nowrap">
+                      {transaction.transaction_id || "N/A"}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -291,40 +373,66 @@ function Dashboard() {
                 <div className="grid grid-cols-1 gap-2 text-xs text-gray-700">
                   <div className="flex items-center gap-2">
                     <List size={14} className="text-blue-500" />
-                    <span className="font-semibold text-gray-900">Created At:</span>
-                    <span className="ml-auto text-right truncate">{formatDate(transaction.createdAt)}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <List size={14} className="text-blue-500" />
-                    <span className="font-semibold text-gray-900">Customer ID:</span>
-                    <span className="ml-auto text-right truncate">{transaction.customer_id || 'N/A'}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <List size={14} className="text-blue-500" />
-                    <span className="font-semibold text-gray-900">R Switch:</span>
-                    <span className="ml-auto text-right truncate">{transaction.r_switch || 'N/A'}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <List size={14} className="text-blue-500" />
-                    <span className="font-semibold text-gray-900">Reason:</span>
-                    <span className="ml-auto text-right truncate">{transaction.desc || 'N/A'}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <List size={14} className="text-blue-500" />
-                    <span className="font-semibold text-gray-900">Status:</span>
-                    <span className={`ml-auto px-2 py-1 rounded-full text-xs font-medium border ${statusClass(transaction.status)}`}>
-                      {transaction.status || 'N/A'}
+                    <span className="font-semibold text-gray-900">
+                      Created At:
+                    </span>
+                    <span className="ml-auto text-right truncate">
+                      {formatDate(transaction.createdAt)}
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
                     <List size={14} className="text-blue-500" />
-                    <span className="font-semibold text-gray-900">Subscriber Number:</span>
-                    <span className="ml-auto text-right truncate">{transaction.subscriber_number || 'N/A'}</span>
+                    <span className="font-semibold text-gray-900">
+                      Customer ID:
+                    </span>
+                    <span className="ml-auto text-right truncate">
+                      {transaction.customer_id || "N/A"}
+                    </span>
                   </div>
                   <div className="flex items-center gap-2">
                     <List size={14} className="text-blue-500" />
-                    <span className="font-semibold text-gray-900">Transaction ID:</span>
-                    <span className="ml-auto text-right truncate">{transaction.transaction_id || 'N/A'}</span>
+                    <span className="font-semibold text-gray-900">
+                      R Switch:
+                    </span>
+                    <span className="ml-auto text-right truncate">
+                      {transaction.r_switch || "N/A"}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <List size={14} className="text-blue-500" />
+                    <span className="font-semibold text-gray-900">Reason:</span>
+                    <span className="ml-auto text-right truncate">
+                      {transaction.desc || "N/A"}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <List size={14} className="text-blue-500" />
+                    <span className="font-semibold text-gray-900">Status:</span>
+                    <span
+                      className={`ml-auto px-2 py-1 rounded-full text-xs font-medium border ${statusClass(
+                        transaction.status
+                      )}`}
+                    >
+                      {transaction.status || "N/A"}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <List size={14} className="text-blue-500" />
+                    <span className="font-semibold text-gray-900">
+                      Subscriber Number:
+                    </span>
+                    <span className="ml-auto text-right truncate">
+                      {transaction.subscriber_number || "N/A"}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <List size={14} className="text-blue-500" />
+                    <span className="font-semibold text-gray-900">
+                      Transaction ID:
+                    </span>
+                    <span className="ml-auto text-right truncate">
+                      {transaction.transaction_id || "N/A"}
+                    </span>
                   </div>
                 </div>
               </div>
