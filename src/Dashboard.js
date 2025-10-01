@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { collection, getDocs } from "firebase/firestore";
+import { collection, onSnapshot, doc, updateDoc } from "firebase/firestore";
 import { db } from "./firebase";
 import { Parser } from "@json2csv/plainjs";
 import {
@@ -14,17 +14,18 @@ import {
 function Dashboard() {
   const [transactions, setTransactions] = useState([]);
   const [filteredTransactions, setFilteredTransactions] = useState([]);
+  const [todayTransactionCount, setTodayTransactionCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [activeTab, setActiveTab] = useState("all");
   const [rSwitchFilter, setRSwitchFilter] = useState("");
 
-  // Fetch transactions from Firestore
+  // Fetch transactions from Firestore in real-time
   useEffect(() => {
-    const fetchTransactions = async () => {
-      try {
-        const querySnapshot = await getDocs(collection(db, "teller_response"));
+    const unsubscribe = onSnapshot(
+      collection(db, "teller_response"),
+      (querySnapshot) => {
         const transactionsData = querySnapshot.docs.map((doc) => ({
           id: doc.id,
           ...doc.data(),
@@ -38,30 +39,44 @@ function Dashboard() {
         setTransactions(sortedTransactions);
         setFilteredTransactions(sortedTransactions);
         setLoading(false);
-      } catch (err) {
+      },
+      (err) => {
         setError("Failed to fetch transactions");
         setLoading(false);
       }
-    };
-    fetchTransactions();
+    );
+
+    return () => unsubscribe();
   }, []);
 
-  // Filter transactions based on search term, tab status, r_switch, and recent tab
+  // Filter transactions and count today's approved transactions
   useEffect(() => {
     let filtered = transactions;
 
+    // Count today's approved transactions (not exported)
+    const today = new Date();
+    today.setHours(0, 0, 0, 0); // Start of current day
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1); // Start of next day
+    const todayApprovedCount = transactions.filter(
+      (transaction) =>
+        transaction.createdAt &&
+        transaction.status?.toLowerCase() === "approved" &&
+        transaction.createdAt.toDate() >= today &&
+        transaction.createdAt.toDate() < tomorrow &&
+        !transaction.exported
+    ).length;
+    setTodayTransactionCount(todayApprovedCount);
+
     // Filter by status (tab) or recent transactions
     if (activeTab === "recent") {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0); // Start of current day
-      const tomorrow = new Date(today);
-      tomorrow.setDate(today.getDate() + 1); // Start of next day
       filtered = filtered.filter(
         (transaction) =>
           transaction.createdAt &&
           transaction.status?.toLowerCase() === "approved" &&
           transaction.createdAt.toDate() >= today &&
-          transaction.createdAt.toDate() < tomorrow
+          transaction.createdAt.toDate() < tomorrow &&
+          !transaction.exported
       );
     } else if (activeTab !== "all") {
       filtered = filtered.filter(
@@ -111,11 +126,11 @@ function Dashboard() {
   };
 
   // Download transactions as CSV (approved or recent approved based on tab)
-  const downloadCSV = (rSwitch = "") => {
+  const downloadCSV = async (rSwitch = "") => {
     try {
       let dataToExport = transactions;
 
-      // If recent tab is active, only include approved transactions from today
+      // If recent tab is active, only include approved transactions from today that are not exported
       if (activeTab === "recent") {
         const today = new Date();
         today.setHours(0, 0, 0, 0); // Start of current day
@@ -126,7 +141,8 @@ function Dashboard() {
             transaction.createdAt &&
             transaction.status?.toLowerCase() === "approved" &&
             transaction.createdAt.toDate() >= today &&
-            transaction.createdAt.toDate() < tomorrow
+            transaction.createdAt.toDate() < tomorrow &&
+            !transaction.exported
         );
       } else {
         // Otherwise, filter by approved status
@@ -183,9 +199,18 @@ function Dashboard() {
           : "approved_transactions.csv";
       link.click();
       URL.revokeObjectURL(link.href);
+
+      // If in recent tab, mark the downloaded transactions as exported in Firestore
+      if (activeTab === "recent") {
+        await Promise.all(
+          dataToExport.map((t) =>
+            updateDoc(doc(db, "teller_response", t.id), { exported: true })
+          )
+        );
+      }
     } catch (err) {
-      console.error("Error generating CSV:", err);
-      alert("Failed to download CSV");
+      console.error("Error generating CSV or updating documents:", err);
+      alert("Failed to download CSV or update transactions");
     }
   };
 
@@ -266,7 +291,7 @@ function Dashboard() {
               {tab === "all"
                 ? "All"
                 : tab === "recent"
-                ? "Today's Approved"
+                ? `Today's Approved (${todayTransactionCount})`
                 : tab}
             </button>
           ))}
