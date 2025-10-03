@@ -1,5 +1,4 @@
 import { useState, useEffect } from "react";
-// 1. Import query and orderBy
 import {
   collection,
   onSnapshot,
@@ -9,7 +8,7 @@ import {
   orderBy,
 } from "firebase/firestore";
 import { db } from "./firebase";
-import { Parser } from "@json2csv/plainjs";
+import * as XLSX from "xlsx";
 import {
   Download,
   Search,
@@ -31,32 +30,22 @@ function Dashboard() {
 
   // Fetch transactions from Firestore in real-time
   useEffect(() => {
-    // 2. Create a query that sorts transactions by createdAt in descending order on the server
     const transactionsCollectionRef = collection(db, "teller_response");
     const q = query(transactionsCollectionRef, orderBy("createdAt", "desc"));
 
     const unsubscribe = onSnapshot(
-      q, // Use the query 'q' instead of the raw collection reference
+      q,
       (querySnapshot) => {
         const transactionsData = querySnapshot.docs.map((doc) => ({
           id: doc.id,
           ...doc.data(),
         }));
-
-        // 3. REMOVE client-side sorting: Data is already sorted by the database
-        // const sortedTransactions = transactionsData.sort((a, b) => {
-        //   const dateA = a.createdAt ? a.createdAt.toDate() : new Date(0);
-        //   const dateB = b.createdAt ? b.createdAt.toDate() : new Date(0);
-        //   return dateB - dateA; // Most recent first
-        // });
-
-        // Use the pre-sorted data directly
         setTransactions(transactionsData);
         setFilteredTransactions(transactionsData);
         setLoading(false);
       },
       (err) => {
-        console.error("Firestore fetch error:", err); // Added console.error for better debugging
+        console.error("Firestore fetch error:", err);
         setError("Failed to fetch transactions");
         setLoading(false);
       }
@@ -69,11 +58,10 @@ function Dashboard() {
   useEffect(() => {
     let filtered = transactions;
 
-    // Count today's approved transactions (not exported)
     const today = new Date();
-    today.setHours(0, 0, 0, 0); // Start of current day
+    today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
-    tomorrow.setDate(today.getDate() + 1); // Start of next day
+    tomorrow.setDate(today.getDate() + 1);
     const todayApprovedCount = transactions.filter(
       (transaction) =>
         transaction.createdAt &&
@@ -84,7 +72,6 @@ function Dashboard() {
     ).length;
     setTodayTransactionCount(todayApprovedCount);
 
-    // Filter by status (tab) or recent transactions
     if (activeTab === "recent") {
       filtered = filtered.filter(
         (transaction) =>
@@ -100,7 +87,6 @@ function Dashboard() {
       );
     }
 
-    // Filter by search term
     if (searchTerm) {
       filtered = filtered.filter((transaction) =>
         Object.values(transaction).some((value) =>
@@ -109,7 +95,6 @@ function Dashboard() {
       );
     }
 
-    // Filter by r_switch
     if (rSwitchFilter) {
       filtered = filtered.filter(
         (transaction) =>
@@ -117,17 +102,10 @@ function Dashboard() {
       );
     }
 
-    // Since the original 'transactions' array is now sorted by the database,
-    // the 'filtered' array is mostly sorted. We still need to run a sort
-    // here only if we introduce a filtering operation that breaks the initial
-    // database sort order (e.g., searching on a non-indexed field).
-    // For now, we'll keep this sort to ensure a consistent experience with
-    // the client-side filtering, but a large array sort here can still be slow.
-    // If the data set is very large, this secondary sort should also be optimized.
     const sortedFiltered = [...filtered].sort((a, b) => {
       const dateA = a.createdAt ? a.createdAt.toDate() : new Date(0);
       const dateB = b.createdAt ? b.createdAt.toDate() : new Date(0);
-      return dateB - dateA; // Most recent first
+      return dateB - dateA;
     });
 
     setFilteredTransactions(sortedFiltered);
@@ -147,17 +125,16 @@ function Dashboard() {
     });
   };
 
-  // Download transactions as CSV (approved or recent approved based on tab)
-  const downloadCSV = async (rSwitch = "") => {
+  // Download transactions as Excel (approved or recent approved based on tab)
+  const downloadExcel = async (rSwitch = "") => {
     try {
       let dataToExport = transactions;
 
-      // If recent tab is active, only include approved transactions from today that are not exported
       if (activeTab === "recent") {
         const today = new Date();
-        today.setHours(0, 0, 0, 0); // Start of current day
+        today.setHours(0, 0, 0, 0);
         const tomorrow = new Date(today);
-        tomorrow.setDate(today.getDate() + 1); // Start of next day
+        tomorrow.setDate(today.getDate() + 1);
         dataToExport = dataToExport.filter(
           (transaction) =>
             transaction.createdAt &&
@@ -167,7 +144,6 @@ function Dashboard() {
             !transaction.exported
         );
       } else {
-        // Otherwise, filter by approved status
         dataToExport = dataToExport.filter(
           (t) => t.status?.toLowerCase() === "approved"
         );
@@ -188,37 +164,45 @@ function Dashboard() {
         return;
       }
 
-      const parser = new Parser({
-        fields: [
-          "code",
-          "createdAt",
-          "customer_id",
-          "desc",
-          "r_switch",
-          "reason",
-          "status",
-          "subscriber_number",
-          "transaction_id",
-        ],
-        transforms: [
-          (item) => ({
-            ...item,
-            createdAt: formatDate(item.createdAt),
-          }),
-        ],
+      // Prepare data for Excel: Extract subscriber_number and numeric value from desc
+      const excelData = dataToExport.map((t) => {
+        // Extract numeric value from desc (e.g., "2" from "Service-Telecel-2GB-Plan")
+        let numericValue = "N/A";
+        if (t.desc) {
+          const match = t.desc.match(/(\d+\.?\d*)/); // Match integers or decimals
+          if (match) {
+            numericValue = match[0]; // Use the matched number (e.g., "2" or "2.5")
+          }
+        }
+        return {
+          subscriber_number: t.subscriber_number || "N/A",
+          desc_numeric: numericValue,
+        };
       });
-      const csv = parser.parse(dataToExport);
-      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+
+      // Create a new workbook and worksheet
+      const worksheet = XLSX.utils.json_to_sheet(excelData);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Transactions");
+
+      // Generate Excel file and trigger download
+      const excelBuffer = XLSX.write(workbook, {
+        bookType: "xlsx",
+        type: "array",
+      });
+      const blob = new Blob([excelBuffer], {
+        type: "application/octet-stream",
+      });
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
       link.download =
         activeTab === "recent"
           ? rSwitch
-            ? `recent_approved_transactions_${rSwitch}.csv`
-            : "recent_approved_transactions.csv"
+            ? `recent_approved_transactions_${rSwitch}.xlsx`
+            : "recent_approved_transactions.xlsx"
           : rSwitch
-          ? `approved_transactions_${rSwitch}.csv`
-          : "approved_transactions.csv";
+          ? `approved_transactions_${rSwitch}.xlsx`
+          : "approved_transactions.xlsx";
       link.click();
       URL.revokeObjectURL(link.href);
 
@@ -231,8 +215,8 @@ function Dashboard() {
         );
       }
     } catch (err) {
-      console.error("Error generating CSV or updating documents:", err);
-      alert("Failed to download CSV or update transactions");
+      console.error("Error generating Excel or updating documents:", err);
+      alert("Failed to download Excel or update transactions");
     }
   };
 
@@ -249,7 +233,6 @@ function Dashboard() {
     }
   };
 
-  // Get unique r_switch values for dropdown
   const uniqueRSwitches = [
     ...new Set(transactions.map((t) => t.r_switch).filter(Boolean)),
   ];
@@ -278,9 +261,8 @@ function Dashboard() {
               ))}
             </select>
             <button
-              onClick={() => downloadCSV(rSwitchFilter)}
+              onClick={() => downloadExcel(rSwitchFilter)}
               className="flex items-center justify-center gap-1 bg-blue-600 text-white px-3 py-2 rounded-lg shadow-md hover:bg-blue-700 transition-colors text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed w-full sm:w-auto"
-              // Updated 'disabled' logic for a more robust and less complex client-side check
               disabled={
                 loading ||
                 (activeTab === "recent" && filteredTransactions.length === 0)
@@ -289,8 +271,8 @@ function Dashboard() {
               <Download className="w-4 h-4" />
               <span className="hidden sm:inline">
                 {activeTab === "recent"
-                  ? "Download Today's Approved CSV"
-                  : "Download Approved CSV"}
+                  ? "Download Today's Approved Excel"
+                  : "Download Approved Excel"}
               </span>
               <span className="sm:hidden">Download</span>
             </button>
