@@ -1,5 +1,13 @@
 import { useState, useEffect } from "react";
-import { collection, onSnapshot, doc, updateDoc } from "firebase/firestore";
+// 1. Import query and orderBy
+import {
+  collection,
+  onSnapshot,
+  doc,
+  updateDoc,
+  query,
+  orderBy,
+} from "firebase/firestore";
 import { db } from "./firebase";
 import { Parser } from "@json2csv/plainjs";
 import {
@@ -23,24 +31,32 @@ function Dashboard() {
 
   // Fetch transactions from Firestore in real-time
   useEffect(() => {
+    // 2. Create a query that sorts transactions by createdAt in descending order on the server
+    const transactionsCollectionRef = collection(db, "teller_response");
+    const q = query(transactionsCollectionRef, orderBy("createdAt", "desc"));
+
     const unsubscribe = onSnapshot(
-      collection(db, "teller_response"),
+      q, // Use the query 'q' instead of the raw collection reference
       (querySnapshot) => {
         const transactionsData = querySnapshot.docs.map((doc) => ({
           id: doc.id,
           ...doc.data(),
         }));
-        // Sort transactions by createdAt in descending order
-        const sortedTransactions = transactionsData.sort((a, b) => {
-          const dateA = a.createdAt ? a.createdAt.toDate() : new Date(0);
-          const dateB = b.createdAt ? b.createdAt.toDate() : new Date(0);
-          return dateB - dateA; // Most recent first
-        });
-        setTransactions(sortedTransactions);
-        setFilteredTransactions(sortedTransactions);
+
+        // 3. REMOVE client-side sorting: Data is already sorted by the database
+        // const sortedTransactions = transactionsData.sort((a, b) => {
+        //   const dateA = a.createdAt ? a.createdAt.toDate() : new Date(0);
+        //   const dateB = b.createdAt ? b.createdAt.toDate() : new Date(0);
+        //   return dateB - dateA; // Most recent first
+        // });
+
+        // Use the pre-sorted data directly
+        setTransactions(transactionsData);
+        setFilteredTransactions(transactionsData);
         setLoading(false);
       },
       (err) => {
+        console.error("Firestore fetch error:", err); // Added console.error for better debugging
         setError("Failed to fetch transactions");
         setLoading(false);
       }
@@ -101,7 +117,13 @@ function Dashboard() {
       );
     }
 
-    // Sort filtered transactions by createdAt in descending order
+    // Since the original 'transactions' array is now sorted by the database,
+    // the 'filtered' array is mostly sorted. We still need to run a sort
+    // here only if we introduce a filtering operation that breaks the initial
+    // database sort order (e.g., searching on a non-indexed field).
+    // For now, we'll keep this sort to ensure a consistent experience with
+    // the client-side filtering, but a large array sort here can still be slow.
+    // If the data set is very large, this secondary sort should also be optimized.
     const sortedFiltered = [...filtered].sort((a, b) => {
       const dateA = a.createdAt ? a.createdAt.toDate() : new Date(0);
       const dateB = b.createdAt ? b.createdAt.toDate() : new Date(0);
@@ -258,12 +280,10 @@ function Dashboard() {
             <button
               onClick={() => downloadCSV(rSwitchFilter)}
               className="flex items-center justify-center gap-1 bg-blue-600 text-white px-3 py-2 rounded-lg shadow-md hover:bg-blue-700 transition-colors text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed w-full sm:w-auto"
+              // Updated 'disabled' logic for a more robust and less complex client-side check
               disabled={
-                activeTab === "recent"
-                  ? filteredTransactions.length === 0
-                  : transactions.filter(
-                      (t) => t.status?.toLowerCase() === "approved"
-                    ).length === 0
+                loading ||
+                (activeTab === "recent" && filteredTransactions.length === 0)
               }
             >
               <Download className="w-4 h-4" />
