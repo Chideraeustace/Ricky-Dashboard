@@ -5,7 +5,6 @@ import {
   doc,
   updateDoc,
   query,
-  orderBy,
 } from "firebase/firestore";
 import { db } from "./firebase";
 import * as XLSX from "xlsx";
@@ -31,15 +30,28 @@ function Dashboard() {
   // Fetch transactions from Firestore in real-time
   useEffect(() => {
     const transactionsCollectionRef = collection(db, "teller_response");
-    const q = query(transactionsCollectionRef, orderBy("createdAt", "desc"));
-
+    const q = query(transactionsCollectionRef);
     const unsubscribe = onSnapshot(
       q,
       (querySnapshot) => {
-        const transactionsData = querySnapshot.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-        }));
+        const uniqueTransIds = new Set();
+        const transactionsData = querySnapshot.docs
+          .map((doc) => ({
+            id: doc.id,
+            ...doc.data(),
+          }))
+          .filter((transaction) => {
+            const transId = transaction.transid || transaction.transaction_id;
+            if (transId) {
+              if (uniqueTransIds.has(transId)) {
+                return false; // Skip duplicates
+              }
+              uniqueTransIds.add(transId);
+              return true;
+            }
+            return true; // Include transactions without transId
+          });
+        console.log("Raw unique transactions:", transactionsData);
         setTransactions(transactionsData);
         setFilteredTransactions(transactionsData);
         setLoading(false);
@@ -50,7 +62,6 @@ function Dashboard() {
         setLoading(false);
       }
     );
-
     return () => unsubscribe();
   }, []);
 
@@ -64,10 +75,11 @@ function Dashboard() {
     tomorrow.setDate(today.getDate() + 1);
     const todayApprovedCount = transactions.filter(
       (transaction) =>
-        transaction.createdAt &&
+        (transaction.createdAt || transaction.purchasedAt) &&
         transaction.status?.toLowerCase() === "approved" &&
-        transaction.createdAt.toDate() >= today &&
-        transaction.createdAt.toDate() < tomorrow &&
+        (transaction.createdAt || transaction.purchasedAt).toDate() >= today &&
+        (transaction.createdAt || transaction.purchasedAt).toDate() <
+          tomorrow &&
         !transaction.exported
     ).length;
     setTodayTransactionCount(todayApprovedCount);
@@ -75,10 +87,12 @@ function Dashboard() {
     if (activeTab === "recent") {
       filtered = filtered.filter(
         (transaction) =>
-          transaction.createdAt &&
+          (transaction.createdAt || transaction.purchasedAt) &&
           transaction.status?.toLowerCase() === "approved" &&
-          transaction.createdAt.toDate() >= today &&
-          transaction.createdAt.toDate() < tomorrow &&
+          (transaction.createdAt || transaction.purchasedAt).toDate() >=
+            today &&
+          (transaction.createdAt || transaction.purchasedAt).toDate() <
+            tomorrow &&
           !transaction.exported
       );
     } else if (activeTab !== "all") {
@@ -98,16 +112,24 @@ function Dashboard() {
     if (rSwitchFilter) {
       filtered = filtered.filter(
         (transaction) =>
-          transaction.r_switch?.toLowerCase() === rSwitchFilter.toLowerCase()
+          transaction.r_switch?.toLowerCase() === rSwitchFilter.toLowerCase() ||
+          transaction.provider?.toLowerCase() === rSwitchFilter.toLowerCase()
       );
     }
 
     const sortedFiltered = [...filtered].sort((a, b) => {
-      const dateA = a.createdAt ? a.createdAt.toDate() : new Date(0);
-      const dateB = b.createdAt ? b.createdAt.toDate() : new Date(0);
+      const dateA =
+        a.createdAt || a.purchasedAt
+          ? (a.createdAt || a.purchasedAt).toDate()
+          : new Date(0);
+      const dateB =
+        b.createdAt || b.purchasedAt
+          ? (b.createdAt || b.purchasedAt).toDate()
+          : new Date(0);
       return dateB - dateA;
     });
 
+    console.log("Final filtered transactions:", sortedFiltered);
     setFilteredTransactions(sortedFiltered);
   }, [searchTerm, transactions, activeTab, rSwitchFilter]);
 
@@ -125,7 +147,21 @@ function Dashboard() {
     });
   };
 
-  // Download transactions as Excel (approved or recent approved based on tab)
+  // Derive GB from desc if gb is missing
+  const getGB = (transaction) => {
+    if (transaction.gb) return transaction.gb;
+    if (transaction.desc) {
+      const match = transaction.desc.match(/(\d+\.?\d*)\s*(GB|MB)/i);
+      if (match) {
+        const value = parseFloat(match[1]);
+        const unit = match[2].toUpperCase();
+        return unit === "GB" ? value : value / 1024; // Convert MB to GB
+      }
+    }
+    return "N/A";
+  };
+
+  // Download transactions as Excel
   const downloadExcel = async (rSwitch = "") => {
     try {
       let dataToExport = transactions;
@@ -137,10 +173,12 @@ function Dashboard() {
         tomorrow.setDate(today.getDate() + 1);
         dataToExport = dataToExport.filter(
           (transaction) =>
-            transaction.createdAt &&
+            (transaction.createdAt || transaction.purchasedAt) &&
             transaction.status?.toLowerCase() === "approved" &&
-            transaction.createdAt.toDate() >= today &&
-            transaction.createdAt.toDate() < tomorrow &&
+            (transaction.createdAt || transaction.purchasedAt).toDate() >=
+              today &&
+            (transaction.createdAt || transaction.purchasedAt).toDate() <
+              tomorrow &&
             !transaction.exported
         );
       } else {
@@ -151,10 +189,13 @@ function Dashboard() {
 
       if (rSwitch) {
         dataToExport = dataToExport.filter(
-          (t) => t.r_switch?.toLowerCase() === rSwitch.toLowerCase()
+          (t) =>
+            t.r_switch?.toLowerCase() === rSwitch.toLowerCase() ||
+            t.provider?.toLowerCase() === rSwitch.toLowerCase()
         );
       }
 
+      console.log("Data to export after filtering:", dataToExport);
       if (dataToExport.length === 0) {
         alert(
           activeTab === "recent"
@@ -164,28 +205,17 @@ function Dashboard() {
         return;
       }
 
-      // Prepare data for Excel: Extract subscriber_number and numeric value from desc
-      const excelData = dataToExport.map((t) => {
-        // Extract numeric value from desc (e.g., "2" from "Service-Telecel-2GB-Plan")
-        let numericValue = "N/A";
-        if (t.desc) {
-          const match = t.desc.match(/(\d+\.?\d*)/); // Match integers or decimals
-          if (match) {
-            numericValue = match[0]; // Use the matched number (e.g., "2" or "2.5")
-          }
-        }
-        return {
-          subscriber_number: t.subscriber_number || "N/A",
-          desc_numeric: numericValue,
-        };
-      });
+      const excelData = dataToExport.map((t) => ({
+        number: t.number || t.subscriber_number || "N/A",
+        gb: getGB(t),
+      }));
 
-      // Create a new workbook and worksheet
+      console.log("Excel data:", excelData);
+
       const worksheet = XLSX.utils.json_to_sheet(excelData);
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, "Transactions");
 
-      // Generate Excel file and trigger download
       const excelBuffer = XLSX.write(workbook, {
         bookType: "xlsx",
         type: "array",
@@ -206,7 +236,6 @@ function Dashboard() {
       link.click();
       URL.revokeObjectURL(link.href);
 
-      // If in recent tab, mark the downloaded transactions as exported in Firestore
       if (activeTab === "recent") {
         await Promise.all(
           dataToExport.map((t) =>
@@ -221,7 +250,7 @@ function Dashboard() {
   };
 
   const statusClass = (status) => {
-    switch (status) {
+    switch (status?.toLowerCase()) {
       case "approved":
         return "bg-green-100 text-green-800 border-green-200";
       case "failed":
@@ -234,7 +263,9 @@ function Dashboard() {
   };
 
   const uniqueRSwitches = [
-    ...new Set(transactions.map((t) => t.r_switch).filter(Boolean)),
+    ...new Set(
+      transactions.map((t) => t.r_switch || t.provider).filter(Boolean)
+    ),
   ];
 
   return (
@@ -260,6 +291,16 @@ function Dashboard() {
                 </option>
               ))}
             </select>
+            <button
+              onClick={() => {
+                setRSwitchFilter("");
+                setSearchTerm("");
+                setActiveTab("all");
+              }}
+              className="bg-gray-500 text-white px-3 py-2 rounded-lg text-sm"
+            >
+              Reset Filters
+            </button>
             <button
               onClick={() => downloadExcel(rSwitchFilter)}
               className="flex items-center justify-center gap-1 bg-blue-600 text-white px-3 py-2 rounded-lg shadow-md hover:bg-blue-700 transition-colors text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed w-full sm:w-auto"
@@ -361,15 +402,19 @@ function Dashboard() {
                     className="hover:bg-gray-50 transition-colors"
                   >
                     <td className="py-3 px-4 whitespace-nowrap">
-                      {formatDate(transaction.createdAt)}
+                      {formatDate(
+                        transaction.createdAt || transaction.purchasedAt
+                      )}
                     </td>
                     <td className="py-3 px-4 whitespace-nowrap">
-                      {transaction.customer_id || "N/A"}
+                      {transaction.customer_id || transaction.userId || "N/A"}
                     </td>
                     <td className="py-3 px-4 whitespace-nowrap">
-                      {transaction.r_switch || "N/A"}
+                      {transaction.r_switch || transaction.provider || "N/A"}
                     </td>
-                    <td className="py-3 px-4">{transaction.desc || "N/A"}</td>
+                    <td className="py-3 px-4">
+                      {transaction.desc || transaction.reason || "N/A"}
+                    </td>
                     <td className="py-3 px-4 whitespace-nowrap">
                       <span
                         className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border ${statusClass(
@@ -380,10 +425,14 @@ function Dashboard() {
                       </span>
                     </td>
                     <td className="py-3 px-4 whitespace-nowrap">
-                      {transaction.subscriber_number || "N/A"}
+                      {transaction.subscriber_number ||
+                        transaction.number ||
+                        "N/A"}
                     </td>
                     <td className="py-3 px-4 whitespace-nowrap">
-                      {transaction.transaction_id || "N/A"}
+                      {transaction.transaction_id ||
+                        transaction.transid ||
+                        "N/A"}
                     </td>
                   </tr>
                 ))}
@@ -404,7 +453,9 @@ function Dashboard() {
                       Created At:
                     </span>
                     <span className="ml-auto text-right truncate">
-                      {formatDate(transaction.createdAt)}
+                      {formatDate(
+                        transaction.createdAt || transaction.purchasedAt
+                      )}
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
@@ -413,7 +464,7 @@ function Dashboard() {
                       Customer ID:
                     </span>
                     <span className="ml-auto text-right truncate">
-                      {transaction.customer_id || "N/A"}
+                      {transaction.customer_id || transaction.userId || "N/A"}
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
@@ -422,14 +473,14 @@ function Dashboard() {
                       R Switch:
                     </span>
                     <span className="ml-auto text-right truncate">
-                      {transaction.r_switch || "N/A"}
+                      {transaction.r_switch || transaction.provider || "N/A"}
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
                     <List size={14} className="text-blue-500" />
                     <span className="font-semibold text-gray-900">Reason:</span>
                     <span className="ml-auto text-right truncate">
-                      {transaction.desc || "N/A"}
+                      {transaction.desc || transaction.reason || "N/A"}
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
@@ -449,7 +500,9 @@ function Dashboard() {
                       Subscriber Number:
                     </span>
                     <span className="ml-auto text-right truncate">
-                      {transaction.subscriber_number || "N/A"}
+                      {transaction.subscriber_number ||
+                        transaction.number ||
+                        "N/A"}
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
@@ -458,7 +511,9 @@ function Dashboard() {
                       Transaction ID:
                     </span>
                     <span className="ml-auto text-right truncate">
-                      {transaction.transaction_id || "N/A"}
+                      {transaction.transaction_id ||
+                        transaction.transid ||
+                        "N/A"}
                     </span>
                   </div>
                 </div>
