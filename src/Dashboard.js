@@ -20,7 +20,10 @@ import {
 function Dashboard() {
   const [transactions, setTransactions] = useState([]);
   const [filteredTransactions, setFilteredTransactions] = useState([]);
+  const [numbers, setNumbers] = useState([]);
+  const [filteredNumbers, setFilteredNumbers] = useState([]);
   const [todayTransactionCount, setTodayTransactionCount] = useState(0);
+  const [numbersCount, setNumbersCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
@@ -65,9 +68,36 @@ function Dashboard() {
     return () => unsubscribe();
   }, []);
 
-  // Filter transactions and count today's approved transactions
+  // Fetch all numbers from Firestore "entries" collection in real-time
   useEffect(() => {
-    let filtered = transactions;
+    const numbersCollectionRef = collection(db, "entries");
+    const q = query(numbersCollectionRef);
+    const unsubscribe = onSnapshot(
+      q,
+      (querySnapshot) => {
+        const numbersData = querySnapshot.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        }));
+        console.log("Raw numbers:", numbersData);
+        setNumbers(numbersData);
+        setFilteredNumbers(numbersData);
+        setNumbersCount(numbersData.filter((n) => !n.exported).length); // Count non-exported entries
+        setLoading(false);
+      },
+      (err) => {
+        console.error("Firestore fetch error for entries:", err);
+        setError("Failed to fetch numbers");
+        setLoading(false);
+      }
+    );
+    return () => unsubscribe();
+  }, []);
+
+  // Filter transactions and numbers, and count today's approved transactions
+  useEffect(() => {
+    let filteredTrans = transactions;
+    let filteredNums = numbers;
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -85,7 +115,7 @@ function Dashboard() {
     setTodayTransactionCount(todayApprovedCount);
 
     if (activeTab === "recent") {
-      filtered = filtered.filter(
+      filteredTrans = filteredTrans.filter(
         (transaction) =>
           (transaction.createdAt || transaction.purchasedAt) &&
           transaction.status?.toLowerCase() === "approved" &&
@@ -95,29 +125,41 @@ function Dashboard() {
             tomorrow &&
           !transaction.exported
       );
+    } else if (activeTab === "numbers") {
+      filteredTrans = []; // Clear transactions for numbers tab
+      filteredNums = filteredNums.filter((number) => !number.exported); // Show only non-exported entries
     } else if (activeTab !== "all") {
-      filtered = filtered.filter(
+      filteredTrans = filteredTrans.filter(
         (transaction) => transaction.status?.toLowerCase() === activeTab
       );
     }
 
     if (searchTerm) {
-      filtered = filtered.filter((transaction) =>
+      filteredTrans = filteredTrans.filter((transaction) =>
         Object.values(transaction).some((value) =>
+          value?.toString().toLowerCase().includes(searchTerm.toLowerCase())
+        )
+      );
+      filteredNums = filteredNums.filter((number) =>
+        Object.values(number).some((value) =>
           value?.toString().toLowerCase().includes(searchTerm.toLowerCase())
         )
       );
     }
 
     if (rSwitchFilter) {
-      filtered = filtered.filter(
+      filteredTrans = filteredTrans.filter(
         (transaction) =>
           transaction.r_switch?.toLowerCase() === rSwitchFilter.toLowerCase() ||
           transaction.provider?.toLowerCase() === rSwitchFilter.toLowerCase()
       );
+      filteredNums = filteredNums.filter(
+        (number) =>
+          number.networkProvider?.toLowerCase() === rSwitchFilter.toLowerCase()
+      );
     }
 
-    const sortedFiltered = [...filtered].sort((a, b) => {
+    const sortedFilteredTrans = [...filteredTrans].sort((a, b) => {
       const dateA =
         a.createdAt || a.purchasedAt
           ? (a.createdAt || a.purchasedAt).toDate()
@@ -129,9 +171,17 @@ function Dashboard() {
       return dateB - dateA;
     });
 
-    console.log("Final filtered transactions:", sortedFiltered);
-    setFilteredTransactions(sortedFiltered);
-  }, [searchTerm, transactions, activeTab, rSwitchFilter]);
+    const sortedFilteredNums = [...filteredNums].sort((a, b) => {
+      const dateA = a.timestamp ? a.timestamp.toDate() : new Date(0);
+      const dateB = b.timestamp ? b.timestamp.toDate() : new Date(0);
+      return dateB - dateA;
+    });
+
+    console.log("Final filtered transactions:", sortedFilteredTrans);
+    console.log("Final filtered numbers:", sortedFilteredNums);
+    setFilteredTransactions(sortedFilteredTrans);
+    setFilteredNumbers(sortedFilteredNums);
+  }, [searchTerm, transactions, numbers, activeTab, rSwitchFilter]);
 
   // Format timestamp
   const formatDate = (timestamp) => {
@@ -161,7 +211,7 @@ function Dashboard() {
     return "N/A";
   };
 
-  // Download transactions as Excel
+  // Download transactions or numbers as Excel
   const downloadExcel = async (rSwitch = "") => {
     try {
       let dataToExport = transactions;
@@ -181,6 +231,8 @@ function Dashboard() {
               tomorrow &&
             !transaction.exported
         );
+      } else if (activeTab === "numbers") {
+        dataToExport = numbers.filter((number) => !number.exported); // Only non-exported numbers
       } else {
         dataToExport = dataToExport.filter(
           (t) => t.status?.toLowerCase() === "approved"
@@ -188,11 +240,18 @@ function Dashboard() {
       }
 
       if (rSwitch) {
-        dataToExport = dataToExport.filter(
-          (t) =>
-            t.r_switch?.toLowerCase() === rSwitch.toLowerCase() ||
-            t.provider?.toLowerCase() === rSwitch.toLowerCase()
-        );
+        if (activeTab === "numbers") {
+          dataToExport = dataToExport.filter(
+            (number) =>
+              number.networkProvider?.toLowerCase() === rSwitch.toLowerCase()
+          );
+        } else {
+          dataToExport = dataToExport.filter(
+            (t) =>
+              t.r_switch?.toLowerCase() === rSwitch.toLowerCase() ||
+              t.provider?.toLowerCase() === rSwitch.toLowerCase()
+          );
+        }
       }
 
       console.log("Data to export after filtering:", dataToExport);
@@ -200,21 +259,34 @@ function Dashboard() {
         alert(
           activeTab === "recent"
             ? "No approved transactions from today found for the selected r_switch."
+            : activeTab === "numbers"
+            ? "No non-exported numbers found for the selected network provider."
             : "No approved transactions found for the selected r_switch."
         );
         return;
       }
 
-      const excelData = dataToExport.map((t) => ({
-        number: t.number || t.subscriber_number || "N/A",
-        gb: getGB(t),
-      }));
+      let excelData;
+      if (activeTab === "numbers") {
+        excelData = dataToExport.map((n) => ({
+          phoneNumber: n.phoneNumber || "N/A",
+        }));
+      } else {
+        excelData = dataToExport.map((t) => ({
+          number: t.number || t.subscriber_number || "N/A",
+          gb: getGB(t),
+        }));
+      }
 
       console.log("Excel data:", excelData);
 
       const worksheet = XLSX.utils.json_to_sheet(excelData);
       const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, "Transactions");
+      XLSX.utils.book_append_sheet(
+        workbook,
+        worksheet,
+        activeTab === "numbers" ? "Numbers" : "Transactions"
+      );
 
       const excelBuffer = XLSX.write(workbook, {
         bookType: "xlsx",
@@ -230,18 +302,31 @@ function Dashboard() {
           ? rSwitch
             ? `recent_approved_transactions_${rSwitch}.xlsx`
             : "recent_approved_transactions.xlsx"
+          : activeTab === "numbers"
+          ? rSwitch
+            ? `numbers_${rSwitch}.xlsx`
+            : "numbers.xlsx"
           : rSwitch
           ? `approved_transactions_${rSwitch}.xlsx`
           : "approved_transactions.xlsx";
       link.click();
       URL.revokeObjectURL(link.href);
 
+      // Mark downloaded entries as exported
       if (activeTab === "recent") {
         await Promise.all(
           dataToExport.map((t) =>
             updateDoc(doc(db, "teller_response", t.id), { exported: true })
           )
         );
+      } else if (activeTab === "numbers") {
+        await Promise.all(
+          dataToExport.map((n) =>
+            updateDoc(doc(db, "entries", n.id), { exported: true })
+          )
+        );
+        // Update numbers count after marking as exported
+        setNumbersCount(numbers.filter((n) => !n.exported).length);
       }
     } catch (err) {
       console.error("Error generating Excel or updating documents:", err);
@@ -264,7 +349,10 @@ function Dashboard() {
 
   const uniqueRSwitches = [
     ...new Set(
-      transactions.map((t) => t.r_switch || t.provider).filter(Boolean)
+      transactions
+        .map((t) => t.r_switch || t.provider)
+        .concat(numbers.map((n) => n.networkProvider))
+        .filter(Boolean)
     ),
   ];
 
@@ -306,13 +394,16 @@ function Dashboard() {
               className="flex items-center justify-center gap-1 bg-blue-600 text-white px-3 py-2 rounded-lg shadow-md hover:bg-blue-700 transition-colors text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed w-full sm:w-auto"
               disabled={
                 loading ||
-                (activeTab === "recent" && filteredTransactions.length === 0)
+                (activeTab === "recent" && filteredTransactions.length === 0) ||
+                (activeTab === "numbers" && filteredNumbers.length === 0)
               }
             >
               <Download className="w-4 h-4" />
               <span className="hidden sm:inline">
                 {activeTab === "recent"
                   ? "Download Today's Approved Excel"
+                  : activeTab === "numbers"
+                  ? "Download Numbers Excel"
                   : "Download Approved Excel"}
               </span>
               <span className="sm:hidden">Download</span>
@@ -321,23 +412,27 @@ function Dashboard() {
         </div>
 
         <div className="flex overflow-x-auto border-b border-gray-200 scrollbar-thin">
-          {["all", "recent", "approved", "failed", "declined"].map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`px-3 py-2 text-xs sm:text-sm font-medium capitalize border-b-2 whitespace-nowrap ${
-                activeTab === tab
-                  ? "border-blue-500 text-blue-600"
-                  : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-              }`}
-            >
-              {tab === "all"
-                ? "All"
-                : tab === "recent"
-                ? `Today's Approved (${todayTransactionCount})`
-                : tab}
-            </button>
-          ))}
+          {["all", "recent", "approved", "failed", "declined", "numbers"].map(
+            (tab) => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                className={`px-3 py-2 text-xs sm:text-sm font-medium capitalize border-b-2 whitespace-nowrap ${
+                  activeTab === tab
+                    ? "border-blue-500 text-blue-600"
+                    : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+                }`}
+              >
+                {tab === "all"
+                  ? "All"
+                  : tab === "recent"
+                  ? `Today's Approved (${todayTransactionCount})`
+                  : tab === "numbers"
+                  ? `Numbers (${numbersCount})`
+                  : tab}
+              </button>
+            )
+          )}
         </div>
       </div>
 
@@ -347,7 +442,7 @@ function Dashboard() {
         </div>
         <input
           type="text"
-          placeholder="Search transactions..."
+          placeholder="Search transactions or numbers..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
           className="flex-1 p-2 text-sm focus:outline-none"
@@ -365,7 +460,7 @@ function Dashboard() {
       {loading ? (
         <div className="flex flex-col justify-center items-center h-64 text-gray-500">
           <Loader className="animate-spin h-8 w-8 sm:h-10 sm:w-10 text-blue-500" />
-          <p className="mt-3 text-sm sm:text-lg">Loading transactions...</p>
+          <p className="mt-3 text-sm sm:text-lg">Loading data...</p>
         </div>
       ) : error ? (
         <div className="flex flex-col justify-center items-center h-64 text-red-500">
@@ -374,6 +469,86 @@ function Dashboard() {
             {error}
           </p>
         </div>
+      ) : activeTab === "numbers" ? (
+        filteredNumbers.length === 0 ? (
+          <div className="text-center py-8 sm:py-10 text-gray-500">
+            <p className="text-sm sm:text-lg">
+              No non-exported numbers found. Try adjusting your search or
+              filters.
+            </p>
+          </div>
+        ) : (
+          <div className="shadow-lg rounded-lg overflow-hidden bg-white">
+            <div className="hidden sm:block overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-100">
+                  <tr className="text-gray-600 text-xs uppercase tracking-wider font-semibold">
+                    <th className="py-3 px-4 text-left">Timestamp</th>
+                    <th className="py-3 px-4 text-left">Phone Number</th>
+                    <th className="py-3 px-4 text-left">Network Provider</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200 text-sm text-gray-700">
+                  {filteredNumbers.map((number) => (
+                    <tr
+                      key={number.id}
+                      className="hover:bg-gray-50 transition-colors"
+                    >
+                      <td className="py-3 px-4 whitespace-nowrap">
+                        {formatDate(number.timestamp)}
+                      </td>
+                      <td className="py-3 px-4 whitespace-nowrap">
+                        {number.phoneNumber || "N/A"}
+                      </td>
+                      <td className="py-3 px-4 whitespace-nowrap">
+                        {number.networkProvider || "N/A"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="sm:hidden space-y-3 p-3">
+              {filteredNumbers.map((number) => (
+                <div
+                  key={number.id}
+                  className="border border-gray-200 rounded-lg p-4 bg-white shadow-sm hover:shadow-md transition-shadow"
+                >
+                  <div className="grid grid-cols-1 gap-2 text-xs text-gray-700">
+                    <div className="flex items-center gap-2">
+                      <List size={14} className="text-blue-500" />
+                      <span className="font-semibold text-gray-900">
+                        Timestamp:
+                      </span>
+                      <span className="ml-auto text-right truncate">
+                        {formatDate(number.timestamp)}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <List size={14} className="text-blue-500" />
+                      <span className="font-semibold text-gray-900">
+                        Phone Number:
+                      </span>
+                      <span className="ml-auto text-right truncate">
+                        {number.phoneNumber || "N/A"}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <List size={14} className="text-blue-500" />
+                      <span className="font-semibold text-gray-900">
+                        Network Provider:
+                      </span>
+                      <span className="ml-auto text-right truncate">
+                        {number.networkProvider || "N/A"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )
       ) : filteredTransactions.length === 0 ? (
         <div className="text-center py-8 sm:py-10 text-gray-500">
           <p className="text-sm sm:text-lg">
