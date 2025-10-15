@@ -30,6 +30,16 @@ function Dashboard() {
   const [activeTab, setActiveTab] = useState("all");
   const [rSwitchFilter, setRSwitchFilter] = useState("");
 
+  // Helper function to format phone numbers
+  const formatPhoneNumber = (phoneNumber) => {
+    if (!phoneNumber) return "N/A";
+    const cleanedNumber = phoneNumber.toString().replace(/\D/g, ""); // Remove non-digits
+    if (cleanedNumber.startsWith("233") && cleanedNumber.length > 3) {
+      return "0" + cleanedNumber.slice(3); // Remove "233" and prepend "0"
+    }
+    return phoneNumber;
+  };
+
   // Fetch transactions from Firestore in real-time
   useEffect(() => {
     const transactionsCollectionRef = collection(db, "teller_response");
@@ -269,11 +279,11 @@ function Dashboard() {
       let excelData;
       if (activeTab === "numbers") {
         excelData = dataToExport.map((n) => ({
-          phoneNumber: n.phoneNumber || "N/A",
+          phoneNumber: formatPhoneNumber(n.phoneNumber),
         }));
       } else {
         excelData = dataToExport.map((t) => ({
-          number: t.number || t.subscriber_number || "N/A",
+          number: formatPhoneNumber(t.number || t.subscriber_number),
           gb: getGB(t),
         }));
       }
@@ -498,7 +508,7 @@ function Dashboard() {
                         {formatDate(number.timestamp)}
                       </td>
                       <td className="py-3 px-4 whitespace-nowrap">
-                        {number.phoneNumber || "N/A"}
+                        {formatPhoneNumber(number.phoneNumber) || "N/A"}
                       </td>
                       <td className="py-3 px-4 whitespace-nowrap">
                         {number.networkProvider || "N/A"}
@@ -531,7 +541,7 @@ function Dashboard() {
                         Phone Number:
                       </span>
                       <span className="ml-auto text-right truncate">
-                        {number.phoneNumber || "N/A"}
+                        {formatPhoneNumber(number.phoneNumber) || "N/A"}
                       </span>
                     </div>
                     <div className="flex items-center gap-2">
@@ -600,9 +610,9 @@ function Dashboard() {
                       </span>
                     </td>
                     <td className="py-3 px-4 whitespace-nowrap">
-                      {transaction.subscriber_number ||
-                        transaction.number ||
-                        "N/A"}
+                      {formatPhoneNumber(
+                        transaction.subscriber_number || transaction.number
+                      ) || "N/A"}
                     </td>
                     <td className="py-3 px-4 whitespace-nowrap">
                       {transaction.transaction_id ||
@@ -675,9 +685,9 @@ function Dashboard() {
                       Subscriber Number:
                     </span>
                     <span className="ml-auto text-right truncate">
-                      {transaction.subscriber_number ||
-                        transaction.number ||
-                        "N/A"}
+                      {formatPhoneNumber(
+                        transaction.subscriber_number || transaction.number
+                      ) || "N/A"}
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
