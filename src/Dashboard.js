@@ -102,7 +102,7 @@ const Dashboard = () => {
   const fetchTotalTransactions = useCallback(async () => {
     try {
       const q = query(
-        collection(db, "theteller_logs"),
+        collection(db, "data_approve_teller_transaction"),
         where("status", "==", "approved"),
         where("exported", "==", false)
       );
@@ -126,7 +126,7 @@ const Dashboard = () => {
       try {
         setLoading(true);
         let q = query(
-          collection(db, "theteller_logs"),
+          collection(db, "data_approve_teller_transaction"),
           where("status", "==", "approved"),
           where("exported", "==", false),
           orderBy("createdAt"),
@@ -135,7 +135,7 @@ const Dashboard = () => {
 
         if (page > 1 && transactionsLastDocs[page - 2]) {
           q = query(
-            collection(db, "theteller_logs"),
+            collection(db, "data_approve_teller_transaction"),
             where("status", "==", "approved"),
             where("exported", "==", false),
             orderBy("createdAt"),
@@ -181,7 +181,7 @@ const Dashboard = () => {
     try {
       setLoading(true);
       const q = query(
-        collection(db, "theteller_logs"),
+        collection(db, "data_approve_teller_transaction"),
         where("status", "==", "approved"),
         where("exported", "==", false),
         limit(maxExportRecords)
@@ -193,7 +193,7 @@ const Dashboard = () => {
         console.log("Raw document data:", docData);
         return {
           Number: formatPhoneNumber(
-            docData.subscriber_number || docData.number || "N/A"
+            docData.recipient_number || docData.subscriber_number || "N/A"
           ),
           GB: docData.gb || extractGB(docData.desc) || "N/A",
           CreatedAt: docData.createdAt
@@ -207,7 +207,7 @@ const Dashboard = () => {
         const batch = writeBatch(db);
         const batchDocs = docs.slice(i, i + batchSize);
         batchDocs.forEach((docSnap) => {
-          const docRef = doc(db, "theteller_logs", docSnap.id);
+          const docRef = doc(db, "data_approve_teller_transaction", docSnap.id);
           batch.update(docRef, { exported: true });
         });
         await batch.commit();
@@ -233,7 +233,7 @@ const Dashboard = () => {
     try {
       setLoading(true);
       const q = query(
-        collection(db, "theteller_logs"),
+        collection(db, "data_approve_teller_transaction"),
         where("status", "==", "approved"),
         where("exported", "==", false),
         limit(maxExportRecords)
