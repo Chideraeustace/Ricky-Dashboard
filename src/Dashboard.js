@@ -13,17 +13,29 @@ import {
 import { db } from "./firebase"; // Import Firestore instance from your firebase config
 import * as XLSX from "xlsx";
 
+// --- Constants ---
+const TRANSACTION_COLLECTION = "data_approve_teller_transaction";
+const USSD_COLLECTION = "teller-response-calls"; // Target collection for USSD
+const PAGE_SIZE = 6;
+const MAX_EXPORT_RECORDS = 1000;
+const BATCH_SIZE = 500;
+
+// --- Utility Functions ---
+
 // Utility to extract GB from desc field
 const extractGB = (desc) => {
   if (!desc) return "N/A";
-  const match = desc.match(/(\d+)GB/);
-  return match ? match[1] : "N/A";
+  // Updated regex to handle format like "1GB" or "200MB" or "2GB-Plan"
+  const match = desc.match(/(\d)/i);
+  return match ? match[1].toUpperCase() : "N/A";
 };
 
 // Utility to format phone number
 const formatPhoneNumber = (number) => {
   if (!number) return "N/A";
-  const cleanedNumber = number.replace(/^233/, "");
+  // Convert to string and remove leading '233'
+  const cleanedNumber = String(number).replace(/^233/, "");
+  // Prepend '0' if it's a 9-digit number after cleaning
   return cleanedNumber.length === 9
     ? `0${cleanedNumber}`
     : cleanedNumber || "N/A";
@@ -46,7 +58,9 @@ const debounce = (func, wait) => {
   };
 };
 
-// Memoized Transaction Card for mobile
+// --- Memoized Components ---
+
+// Memoized Transaction Card for mobile (Regular)
 const TransactionCard = memo(({ tx }) => (
   <div className="p-3 bg-white rounded-lg shadow-sm">
     <p className="text-xs text-gray-800">
@@ -54,11 +68,28 @@ const TransactionCard = memo(({ tx }) => (
       {formatPhoneNumber(tx.subscriber_number || tx.number || "N/A")}
     </p>
     <p className="text-xs text-gray-800 mt-1">
-      <span className="font-semibold">GB:</span>{" "}
+      <span className="font-semibold">Data:</span>{" "}
       {tx.gb || extractGB(tx.desc) || "N/A"}
     </p>
     <p className="text-xs text-gray-800 mt-1">
       <span className="font-semibold">Created At:</span>{" "}
+      {tx.createdAt ? new Date(tx.createdAt.toDate()).toLocaleString() : "N/A"}
+    </p>
+  </div>
+));
+
+// Memoized USSD Transaction Card for mobile (Updated)
+const UssdTransactionCard = memo(({ tx }) => (
+  <div className="p-3 bg-white rounded-lg shadow-sm">
+    <p className="text-xs text-gray-800">
+      <span className="font-semibold">Number:</span>{" "}
+      {formatPhoneNumber(tx.subscriber_number || "N/A")}
+    </p>
+    <p className="text-xs text-gray-800 mt-1">
+      <span className="font-semibold">Data:</span> {extractGB(tx.desc) || "N/A"}
+    </p>
+    <p className="text-xs text-gray-800 mt-1">
+      <span className="font-semibold">Date:</span>{" "}
       {tx.createdAt ? new Date(tx.createdAt.toDate()).toLocaleString() : "N/A"}
     </p>
   </div>
@@ -73,39 +104,62 @@ const SkeletonCard = () => (
   </div>
 );
 
+// --- Dashboard Component ---
+
 const Dashboard = () => {
-  const [transactions, setTransactions] = useState([]);
+  // --- Shared State ---
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [transactionsPage, setTransactionsPage] = useState(1);
-  const [transactionsLastDocs, setTransactionsLastDocs] = useState([]);
-  const [hasMoreTransactions, setHasMoreTransactions] = useState(true);
+  const [activeTab, setActiveTab] = useState("transactions"); // 'transactions' or 'ussd'
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [confirmAction, setConfirmAction] = useState(null);
   const [recordCount, setRecordCount] = useState(0);
+
+  // --- Transaction State (Regular) ---
+  const [transactions, setTransactions] = useState([]);
+  const [transactionsPage, setTransactionsPage] = useState(1);
+  const [transactionsLastDocs, setTransactionsLastDocs] = useState([]);
+  const [hasMoreTransactions, setHasMoreTransactions] = useState(true);
   const [transactionsCache, setTransactionsCache] = useState({});
   const [totalTransactions, setTotalTransactions] = useState(0);
-  const pageSize = 6;
-  const maxExportRecords = 1000;
-  const batchSize = 500;
 
-  // Memoized query fields to reduce Firestore payload
-  const selectFields = [
-    "subscriber_number",
-    "number",
-    "gb",
-    "desc",
-    "createdAt",
-  ];
+  // --- USSD Transaction State (Updated) ---
+  const [ussdTransactions, setUssdTransactions] = useState([]);
+  const [ussdPage, setUssdPage] = useState(1);
+  const [ussdLastDocs, setUssdLastDocs] = useState([]);
+  const [hasMoreUssd, setHasMoreUssd] = useState(true);
+  const [ussdCache, setUssdCache] = useState({});
+  const [totalUssd, setTotalUssd] = useState(0);
 
-  // Fetch total count of transactions
+  // --- Data Fetching Logic ---
+
+  const getBaseQuery = (
+    collectionName,
+    statusFilter = true,
+    exportedFilter = true
+  ) => {
+    let baseQuery = collection(db, collectionName);
+    const conditions = [];
+
+    if (statusFilter) {
+      conditions.push(where("status", "==", "approved"));
+    }
+    if (exportedFilter) {
+      conditions.push(where("exported", "==", false));
+    }
+
+    // USSD uses `createdAt` for ordering, regular may use it too
+    conditions.push(orderBy("createdAt", "desc"));
+
+    return conditions.length > 0
+      ? query(baseQuery, ...conditions)
+      : query(baseQuery);
+  };
+
+  // Fetch total count of regular transactions
   const fetchTotalTransactions = useCallback(async () => {
     try {
-      const q = query(
-        collection(db, "data_approve_teller_transaction"),
-        where("status", "==", "approved"),
-        where("exported", "==", false)
-      );
+      const q = getBaseQuery(TRANSACTION_COLLECTION, true, true);
       const querySnapshot = await getDocs(q);
       setTotalTransactions(querySnapshot.size);
     } catch (err) {
@@ -125,23 +179,16 @@ const Dashboard = () => {
 
       try {
         setLoading(true);
-        let q = query(
-          collection(db, "data_approve_teller_transaction"),
-          where("status", "==", "approved"),
-          where("exported", "==", false),
-          orderBy("createdAt"),
-          limit(pageSize)
-        );
+        let q = getBaseQuery(TRANSACTION_COLLECTION, true, true, false);
 
         if (page > 1 && transactionsLastDocs[page - 2]) {
           q = query(
-            collection(db, "data_approve_teller_transaction"),
-            where("status", "==", "approved"),
-            where("exported", "==", false),
-            orderBy("createdAt"),
+            q,
             startAfter(transactionsLastDocs[page - 2]),
-            limit(pageSize)
+            limit(PAGE_SIZE)
           );
+        } else {
+          q = query(q, limit(PAGE_SIZE));
         }
 
         const querySnapshot = await getDocs(q);
@@ -150,16 +197,16 @@ const Dashboard = () => {
           ...doc.data(),
         }));
 
-        console.log("Fetched transactions:", data);
         setTransactions(data);
         setTransactionsCache((prev) => ({ ...prev, [page]: data }));
+
         if (querySnapshot.docs.length > 0) {
           const newLastDocs = [...transactionsLastDocs];
           newLastDocs[page - 1] =
             querySnapshot.docs[querySnapshot.docs.length - 1];
           setTransactionsLastDocs(newLastDocs);
         }
-        setHasMoreTransactions(querySnapshot.docs.length === pageSize);
+        setHasMoreTransactions(querySnapshot.docs.length === PAGE_SIZE);
         setLoading(false);
       } catch (err) {
         setError("Failed to fetch transactions: " + err.message);
@@ -170,32 +217,114 @@ const Dashboard = () => {
     [transactionsCache, transactionsLastDocs]
   );
 
-  // Fetch data on mount and page change
+  // Fetch total count of USSD transactions (Updated)
+  const fetchTotalUssd = useCallback(async () => {
+    try {
+      // Filter by status == "approved" and exported == false
+      const q = getBaseQuery(USSD_COLLECTION, true, true);
+      const querySnapshot = await getDocs(q);
+      setTotalUssd(querySnapshot.size);
+    } catch (err) {
+      setError("Failed to fetch total USSD count: " + err.message);
+      console.error("Failed to fetch total USSD count:", err);
+    }
+  }, []);
+
+  // Fetch USSD transactions with pagination and caching (Updated)
+  const fetchUssdTransactions = useCallback(
+    async (page = 1) => {
+      if (ussdCache[page]) {
+        setUssdTransactions(ussdCache[page]);
+        setLoading(false);
+        return;
+      }
+
+      try {
+        setLoading(true);
+        // Filter by status == "approved" and exported == false
+        let q = getBaseQuery(USSD_COLLECTION,true, true, false);
+
+        if (page > 1 && ussdLastDocs[page - 2]) {
+          q = query(q, startAfter(ussdLastDocs[page - 2]), limit(PAGE_SIZE));
+        } else {
+          q = query(q, limit(PAGE_SIZE));
+        }
+
+        const querySnapshot = await getDocs(q);
+        const data = querySnapshot.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        }));
+
+        setUssdTransactions(data);
+        setUssdCache((prev) => ({ ...prev, [page]: data }));
+
+        if (querySnapshot.docs.length > 0) {
+          const newLastDocs = [...ussdLastDocs];
+          newLastDocs[page - 1] =
+            querySnapshot.docs[querySnapshot.docs.length - 1];
+          setUssdLastDocs(newLastDocs);
+        }
+        setHasMoreUssd(querySnapshot.docs.length === PAGE_SIZE);
+        setLoading(false);
+      } catch (err) {
+        setError("Failed to fetch USSD transactions: " + err.message);
+        console.error("Failed to fetch USSD transactions:", err);
+        setLoading(false);
+      }
+    },
+    [ussdCache, ussdLastDocs]
+  );
+
+  // --- Effects ---
+
+  // Initial and subsequent data fetch based on active tab
   useEffect(() => {
-    fetchTransactions(transactionsPage);
-    fetchTotalTransactions();
-  }, [fetchTransactions, fetchTotalTransactions, transactionsPage]);
+    setError(null); // Clear error on tab/page change
+    setLoading(true);
+    if (activeTab === "transactions") {
+      fetchTransactions(transactionsPage);
+      fetchTotalTransactions();
+    } else {
+      fetchUssdTransactions(ussdPage);
+      fetchTotalUssd();
+    }
+  }, [
+    activeTab,
+    transactionsPage,
+    ussdPage,
+    fetchTransactions,
+    fetchTotalTransactions,
+    fetchUssdTransactions,
+    fetchTotalUssd,
+  ]);
+
+  // Clear error after 5 seconds
+  useEffect(() => {
+    if (error) {
+      const timer = setTimeout(() => setError(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [error]);
+
+  // --- Handlers ---
 
   // Handle download for Transactions
   const handleDownloadTransactions = useCallback(async () => {
     try {
       setLoading(true);
-      const q = query(
-        collection(db, "data_approve_teller_transaction"),
-        where("status", "==", "approved"),
-        where("exported", "==", false),
-        limit(maxExportRecords)
-      );
-      const querySnapshot = await getDocs(q);
+      const q = getBaseQuery(TRANSACTION_COLLECTION, true, true, false);
+      const limitQ = query(q, limit(MAX_EXPORT_RECORDS));
+
+      const querySnapshot = await getDocs(limitQ);
       const docs = querySnapshot.docs;
       const data = docs.map((doc) => {
         const docData = doc.data();
-        console.log("Raw document data:", docData);
         return {
           Number: formatPhoneNumber(
             docData.recipient_number || docData.subscriber_number || "N/A"
           ),
-          GB: docData.gb || extractGB(docData.desc) || "N/A",
+          Data: docData.gb || extractGB(docData.desc) || "N/A", // Changed GB to Data for clarity
           CreatedAt: docData.createdAt
             ? new Date(docData.createdAt.toDate()).toLocaleString()
             : "N/A",
@@ -203,17 +332,18 @@ const Dashboard = () => {
       });
 
       setRecordCount(docs.length);
-      for (let i = 0; i < docs.length; i += batchSize) {
+      // Batch update 'exported' status
+      for (let i = 0; i < docs.length; i += BATCH_SIZE) {
         const batch = writeBatch(db);
-        const batchDocs = docs.slice(i, i + batchSize);
+        const batchDocs = docs.slice(i, i + BATCH_SIZE);
         batchDocs.forEach((docSnap) => {
-          const docRef = doc(db, "data_approve_teller_transaction", docSnap.id);
+          const docRef = doc(db, TRANSACTION_COLLECTION, docSnap.id);
           batch.update(docRef, { exported: true });
         });
         await batch.commit();
       }
 
-      downloadExcel(data, "Transactions.xlsx", ["Number", "GB", "CreatedAt"]);
+      downloadExcel(data, "Transactions.xlsx", ["Number", "Data", "CreatedAt"]);
       setTransactionsCache({});
       setTransactionsPage(1);
       setTransactionsLastDocs([]);
@@ -228,16 +358,88 @@ const Dashboard = () => {
     }
   }, [fetchTransactions, fetchTotalTransactions]);
 
-  // Handle confirmation dialog
-  const openConfirmDialog = useCallback(async (action) => {
+  // Handle download for USSD Transactions (Updated to be similar)
+  const handleDownloadUssd = useCallback(async () => {
     try {
       setLoading(true);
-      const q = query(
-        collection(db, "data_approve_teller_transaction"),
-        where("status", "==", "approved"),
-        where("exported", "==", false),
-        limit(maxExportRecords)
+      // Filter by status == "approved" and exported == false
+      const q = getBaseQuery(USSD_COLLECTION, true, false);
+      const limitQ = query(q, limit(MAX_EXPORT_RECORDS));
+
+      const querySnapshot = await getDocs(limitQ);
+      const docs = querySnapshot.docs;
+      const data = docs.map((doc) => {
+        const docData = doc.data();
+        return {
+          Number: formatPhoneNumber(docData.subscriber_number || "N/A"), // Use subscriber_number
+          Data: extractGB(docData.desc) || "N/A", // Extract data size from desc
+          CreatedAt: docData.createdAt
+            ? new Date(docData.createdAt.toDate()).toLocaleString()
+            : "N/A",
+        };
+      });
+
+      setRecordCount(docs.length);
+
+      // Batch update 'exported' status to TRUE, similar to normal transactions
+      for (let i = 0; i < docs.length; i += BATCH_SIZE) {
+        const batch = writeBatch(db);
+        const batchDocs = docs.slice(i, i + BATCH_SIZE);
+        batchDocs.forEach((docSnap) => {
+          const docRef = doc(db, USSD_COLLECTION, docSnap.id);
+          // Assuming the USSD collection also has an 'exported' field
+          batch.update(docRef, { exported: true });
+        });
+        await batch.commit();
+      }
+
+      downloadExcel(data, "UssdTransactions.xlsx", [
+        "Number",
+        "Data",
+        "CreatedAt",
+      ]);
+
+      // Reset state and re-fetch the first page after export
+      setUssdCache({});
+      setUssdPage(1);
+      setUssdLastDocs([]);
+      setHasMoreUssd(true);
+      await fetchUssdTransactions(1);
+      await fetchTotalUssd();
+    } catch (err) {
+      setError(
+        "Failed to download or update USSD transactions: " + err.message
       );
+      console.error("Failed to download or update USSD transactions:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, [fetchUssdTransactions, fetchTotalUssd]);
+
+  // Handle confirmation dialog
+  const openConfirmDialog = useCallback(async (action, collectionName) => {
+    try {
+      setLoading(true);
+      const collectionRef = collection(db, collectionName);
+
+      let q;
+      if (collectionName === TRANSACTION_COLLECTION) {
+        q = query(
+          collectionRef,
+          where("status", "==", "approved"),
+          where("exported", "==", false),
+          limit(MAX_EXPORT_RECORDS)
+        );
+      } else {
+        // For USSD
+        q = query(
+          collectionRef,
+          where("status", "==", "approved"), // Filter for approved status
+          where("exported", "==", false), // Filter for not exported
+          limit(MAX_EXPORT_RECORDS)
+        );
+      }
+
       const querySnapshot = await getDocs(q);
       setRecordCount(querySnapshot.docs.length);
       setConfirmAction(() => action);
@@ -261,10 +463,10 @@ const Dashboard = () => {
       confirmAction();
     }
     closeConfirmDialog();
-  }, [confirmAction]);
+  }, [confirmAction, closeConfirmDialog]);
 
-  // Debounced pagination controls
-  const handlePrevPage = useCallback(
+  // Debounced pagination controls for Transactions
+  const handlePrevPageTransactions = useCallback(
     debounce(() => {
       if (transactionsPage > 1) {
         setTransactionsPage((prev) => prev - 1);
@@ -273,7 +475,7 @@ const Dashboard = () => {
     [transactionsPage]
   );
 
-  const handleNextPage = useCallback(
+  const handleNextPageTransactions = useCallback(
     debounce(() => {
       if (hasMoreTransactions) {
         setTransactionsPage((prev) => prev + 1);
@@ -282,16 +484,243 @@ const Dashboard = () => {
     [hasMoreTransactions]
   );
 
-  // Clear error after 5 seconds
-  useEffect(() => {
-    if (error) {
-      const timer = setTimeout(() => setError(null), 5000);
-      return () => clearTimeout(timer);
-    }
-  }, [error]);
+  // Debounced pagination controls for USSD
+  const handlePrevPageUssd = useCallback(
+    debounce(() => {
+      if (ussdPage > 1) {
+        setUssdPage((prev) => prev - 1);
+      }
+    }, 300),
+    [ussdPage]
+  );
 
-  // Memoized transaction data for rendering
+  const handleNextPageUssd = useCallback(
+    debounce(() => {
+      if (hasMoreUssd) {
+        setUssdPage((prev) => prev + 1);
+      }
+    }, 300),
+    [hasMoreUssd]
+  );
+
+  // --- Memoized Data for Rendering ---
+
   const memoizedTransactions = useMemo(() => transactions, [transactions]);
+  const memoizedUssd = useMemo(() => ussdTransactions, [ussdTransactions]);
+
+  // --- Render Helpers ---
+
+  const renderPaginationControls = (
+    currentPage,
+    hasMore,
+    handlePrev,
+    handleNext
+  ) => (
+    <div className="flex flex-col items-center sm:flex-row sm:justify-between mt-4 space-y-2 sm:space-y-0">
+      <button
+        onClick={handlePrev}
+        disabled={currentPage === 1}
+        className={`w-full sm:w-auto px-3 sm:px-4 py-1 sm:py-2 rounded-lg text-xs sm:text-sm font-medium ${
+          currentPage === 1
+            ? "bg-gray-200 text-gray-400 cursor-not-allowed"
+            : "bg-indigo-600 text-white hover:bg-indigo-700 focus:ring-1 focus:ring-indigo-500"
+        }`}
+      >
+        Previous
+      </button>
+      <span className="text-xs text-gray-600">Page {currentPage}</span>
+      <button
+        onClick={handleNext}
+        disabled={!hasMore}
+        className={`w-full sm:w-auto px-3 sm:px-4 py-1 sm:py-2 rounded-lg text-xs sm:text-sm font-medium ${
+          !hasMore
+            ? "bg-gray-200 text-gray-400 cursor-not-allowed"
+            : "bg-indigo-600 text-white hover:bg-indigo-700 focus:ring-1 focus:ring-indigo-500"
+        }`}
+      >
+        Next
+      </button>
+    </div>
+  );
+
+  const renderTransactionTable = (data) => (
+    <div className="hidden sm:block overflow-x-auto">
+      <table className="min-w-full divide-y divide-gray-100">
+        <thead className="bg-gray-50">
+          <tr>
+            <th className="px-3 sm:px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+              Number
+            </th>
+            <th className="px-3 sm:px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+              Data
+            </th>
+            <th className="px-3 sm:px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+              Created At
+            </th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-100">
+          {data.map((tx) => (
+            <tr key={tx.id} className="hover:bg-gray-50 transition-colors">
+              <td className="px-3 sm:px-4 py-2 text-xs text-gray-800">
+                {formatPhoneNumber(tx.subscriber_number || tx.number || "N/A")}
+              </td>
+              <td className="px-3 sm:px-4 py-2 text-xs text-gray-800">
+                {tx.gb || extractGB(tx.desc) || "N/A"}
+              </td>
+              <td className="px-3 sm:px-4 py-2 text-xs text-gray-800">
+                {tx.createdAt
+                  ? new Date(tx.createdAt.toDate()).toLocaleString()
+                  : "N/A"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  const renderUssdTable = (data) => (
+    <div className="hidden sm:block overflow-x-auto">
+      <table className="min-w-full divide-y divide-gray-100">
+        <thead className="bg-gray-50">
+          <tr>
+            <th className="px-3 sm:px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+              Number
+            </th>
+            <th className="px-3 sm:px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+              Data
+            </th>
+            <th className="px-3 sm:px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+              Created At
+            </th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-100">
+          {data.map((tx) => (
+            <tr key={tx.id} className="hover:bg-gray-50 transition-colors">
+              <td className="px-3 sm:px-4 py-2 text-xs text-gray-800">
+                {formatPhoneNumber(tx.subscriber_number || "N/A")}
+              </td>
+              <td className="px-3 sm:px-4 py-2 text-xs text-gray-800">
+                {extractGB(tx.desc) || "N/A"}
+              </td>
+              <td className="px-3 sm:px-4 py-2 text-xs text-gray-800">
+                {tx.createdAt
+                  ? new Date(tx.createdAt.toDate()).toLocaleString()
+                  : "N/A"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  const renderTransactionSection = () => (
+    <div>
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-3 sm:mb-4">
+        <h2 className="text-lg sm:text-xl font-semibold text-gray-800">
+          Approved Teller Transactions
+        </h2>
+        {transactions.length > 0 && (
+          <button
+            onClick={() =>
+              openConfirmDialog(
+                handleDownloadTransactions,
+                TRANSACTION_COLLECTION
+              )
+            }
+            className="mt-2 sm:mt-0 px-3 sm:px-4 py-1 sm:py-2 bg-indigo-600 text-white rounded-lg text-xs sm:text-sm hover:bg-indigo-700 focus:ring-1 focus:ring-indigo-500 shadow-sm"
+          >
+            Export Transactions
+          </button>
+        )}
+      </div>
+      <p className="text-xs text-gray-500 mb-3">
+        Total Pending Export: {totalTransactions} | Page {transactionsPage} (
+        {transactions.length})
+      </p>
+      {transactions.length > 0 ? (
+        <>
+          {renderTransactionTable(memoizedTransactions)}
+          <div className="sm:hidden space-y-3">
+            {loading
+              ? Array(PAGE_SIZE)
+                  .fill()
+                  .map((_, index) => <SkeletonCard key={index} />)
+              : memoizedTransactions.map((tx) => (
+                  <TransactionCard key={tx.id} tx={tx} />
+                ))}
+          </div>
+          {renderPaginationControls(
+            transactionsPage,
+            hasMoreTransactions,
+            handlePrevPageTransactions,
+            handleNextPageTransactions
+          )}
+        </>
+      ) : (
+        <div className="text-center py-6">
+          <p className="text-sm text-gray-500">
+            No approved transactions pending export.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+
+  const renderUssdSection = () => (
+    <div>
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-3 sm:mb-4">
+        <h2 className="text-lg sm:text-xl font-semibold text-gray-800">
+          Approved USSD Transactions
+        </h2>
+        {ussdTransactions.length > 0 && (
+          <button
+            onClick={() =>
+              openConfirmDialog(handleDownloadUssd, USSD_COLLECTION)
+            }
+            className="mt-2 sm:mt-0 px-3 sm:px-4 py-1 sm:py-2 bg-indigo-600 text-white rounded-lg text-xs sm:text-sm hover:bg-indigo-700 focus:ring-1 focus:ring-indigo-500 shadow-sm"
+          >
+            Export USSD Data
+          </button>
+        )}
+      </div>
+      <p className="text-xs text-gray-500 mb-3">
+        Total Pending Export: {totalUssd} | Page {ussdPage} (
+        {ussdTransactions.length})
+      </p>
+      {ussdTransactions.length > 0 ? (
+        <>
+          {renderUssdTable(memoizedUssd)}
+          <div className="sm:hidden space-y-3">
+            {loading
+              ? Array(PAGE_SIZE)
+                  .fill()
+                  .map((_, index) => <SkeletonCard key={index} />)
+              : memoizedUssd.map((tx) => (
+                  <UssdTransactionCard key={tx.id} tx={tx} />
+                ))}
+          </div>
+          {renderPaginationControls(
+            ussdPage,
+            hasMoreUssd,
+            handlePrevPageUssd,
+            handleNextPageUssd
+          )}
+        </>
+      ) : (
+        <div className="text-center py-6">
+          <p className="text-sm text-gray-500">
+            No approved USSD transactions pending export.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+
+  // --- Main Render ---
 
   return (
     <div className="min-h-screen bg-gray-50 p-3 sm:p-6">
@@ -301,9 +730,33 @@ const Dashboard = () => {
           Transaction Dashboard
         </h1>
         <p className="text-xs text-gray-500 mt-1">
-          View and export approved transactions
+          View and export approved transactions from teller and USSD channels
         </p>
       </header>
+
+      {/* Tab Navigation */}
+      <div className="mb-3 sm:mb-4 flex border-b border-gray-200">
+        <button
+          onClick={() => setActiveTab("transactions")}
+          className={`py-2 px-4 text-sm font-medium transition-colors ${
+            activeTab === "transactions"
+              ? "border-b-2 border-indigo-600 text-indigo-600"
+              : "text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          Teller Transactions
+        </button>
+        <button
+          onClick={() => setActiveTab("ussd")}
+          className={`py-2 px-4 text-sm font-medium transition-colors ${
+            activeTab === "ussd"
+              ? "border-b-2 border-indigo-600 text-indigo-600"
+              : "text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          USSD Transactions
+        </button>
+      </div>
 
       {/* Confirmation Dialog */}
       {showConfirmDialog && (
@@ -313,11 +766,14 @@ const Dashboard = () => {
               Confirm Export
             </h3>
             <p className="text-xs sm:text-sm text-gray-600 mb-3 sm:mb-4">
-              Export {recordCount} transactions? This will mark them as
-              exported.
-              {recordCount >= maxExportRecords && (
+              Export {recordCount} records?
+              <span className="block mt-1">
+                This will mark them as **exported** and they will no longer
+                appear on this dashboard.
+              </span>
+              {recordCount >= MAX_EXPORT_RECORDS && (
                 <span className="block mt-1 text-xs text-red-500">
-                  Only the first {maxExportRecords} records will be exported.
+                  Only the first {MAX_EXPORT_RECORDS} records will be exported.
                 </span>
               )}
             </p>
@@ -346,7 +802,8 @@ const Dashboard = () => {
           <div className="flex flex-col items-center justify-center py-6 sm:py-8">
             <div className="animate-spin rounded-full h-6 sm:h-8 w-6 sm:w-8 border-t-2 border-b-2 border-indigo-600"></div>
             <span className="mt-2 text-xs sm:text-sm text-gray-600">
-              Loading...
+              Loading{" "}
+              {activeTab === "transactions" ? "Teller data" : "USSD data"}...
             </span>
           </div>
         )}
@@ -354,118 +811,17 @@ const Dashboard = () => {
         {/* Error State */}
         {!loading && error && (
           <div className="bg-red-50 border-l-2 border-red-400 text-red-600 p-3 rounded-md my-3 sm:my-4">
-            <p className="text-xs sm:text-sm font-medium">{error}</p>
+            <p className="text-xs sm:text-sm font-medium">⚠️ {error}</p>
             <p className="text-xs">Clears in 5 seconds.</p>
           </div>
         )}
 
-        {/* Transactions Section */}
+        {/* Content Section */}
         {!loading && !error && (
-          <div>
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-3 sm:mb-4">
-              <h2 className="text-lg sm:text-xl font-semibold text-gray-800">
-                Transactions
-              </h2>
-              {transactions.length > 0 && (
-                <button
-                  onClick={() => openConfirmDialog(handleDownloadTransactions)}
-                  className="mt-2 sm:mt-0 px-3 sm:px-4 py-1 sm:py-2 bg-indigo-600 text-white rounded-lg text-xs sm:text-sm hover:bg-indigo-700 focus:ring-1 focus:ring-indigo-500 shadow-sm"
-                >
-                  Export to Excel
-                </button>
-              )}
-            </div>
-            <p className="text-xs text-gray-500 mb-3">
-              Total: {totalTransactions} | Page {transactionsPage} (
-              {transactions.length})
-            </p>
-            {transactions.length > 0 ? (
-              <>
-                {/* Table for larger screens */}
-                <div className="hidden sm:block overflow-x-auto">
-                  <table className="min-w-full divide-y divide-gray-100">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="px-3 sm:px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">
-                          Number
-                        </th>
-                        <th className="px-3 sm:px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">
-                          GB
-                        </th>
-                        <th className="px-3 sm:px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">
-                          Created At
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {memoizedTransactions.map((tx) => (
-                        <tr
-                          key={tx.id}
-                          className="hover:bg-gray-50 transition-colors"
-                        >
-                          <td className="px-3 sm:px-4 py-2 text-xs text-gray-800">
-                            {formatPhoneNumber(
-                              tx.subscriber_number || tx.number || "N/A"
-                            )}
-                          </td>
-                          <td className="px-3 sm:px-4 py-2 text-xs text-gray-800">
-                            {tx.gb || extractGB(tx.desc) || "N/A"}
-                          </td>
-                          <td className="px-3 sm:px-4 py-2 text-xs text-gray-800">
-                            {tx.createdAt
-                              ? new Date(tx.createdAt.toDate()).toLocaleString()
-                              : "N/A"}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                {/* Card layout for mobile */}
-                <div className="sm:hidden space-y-3">
-                  {loading
-                    ? Array(pageSize)
-                        .fill()
-                        .map((_, index) => <SkeletonCard key={index} />)
-                    : memoizedTransactions.map((tx) => (
-                        <TransactionCard key={tx.id} tx={tx} />
-                      ))}
-                </div>
-                {/* Pagination */}
-                <div className="flex flex-col items-center sm:flex-row sm:justify-between mt-4 space-y-2 sm:space-y-0">
-                  <button
-                    onClick={handlePrevPage}
-                    disabled={transactionsPage === 1}
-                    className={`w-full sm:w-auto px-3 sm:px-4 py-1 sm:py-2 rounded-lg text-xs sm:text-sm font-medium ${
-                      transactionsPage === 1
-                        ? "bg-gray-200 text-gray-400 cursor-not-allowed"
-                        : "bg-indigo-600 text-white hover:bg-indigo-700 focus:ring-1 focus:ring-indigo-500"
-                    }`}
-                  >
-                    Previous
-                  </button>
-                  <span className="text-xs text-gray-600">
-                    Page {transactionsPage}
-                  </span>
-                  <button
-                    onClick={handleNextPage}
-                    disabled={!hasMoreTransactions}
-                    className={`w-full sm:w-auto px-3 sm:px-4 py-1 sm:py-2 rounded-lg text-xs sm:text-sm font-medium ${
-                      !hasMoreTransactions
-                        ? "bg-gray-200 text-gray-400 cursor-not-allowed"
-                        : "bg-indigo-600 text-white hover:bg-indigo-700 focus:ring-1 focus:ring-indigo-500"
-                    }`}
-                  >
-                    Next
-                  </button>
-                </div>
-              </>
-            ) : (
-              <div className="text-center py-6">
-                <p className="text-sm text-gray-500">No transactions found.</p>
-              </div>
-            )}
-          </div>
+          <>
+            {activeTab === "transactions" && renderTransactionSection()}
+            {activeTab === "ussd" && renderUssdSection()}
+          </>
         )}
       </main>
     </div>
