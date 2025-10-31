@@ -118,10 +118,8 @@ const Dashboard = () => {
   // Fetch total count of transactions
   const fetchTotalTransactions = async () => {
     try {
-      const today = getTodayStart();
       const q = query(
-        collection(db, "data_approve_teller_transaction"),
-        where("createdAt", ">=", today),
+        collection(db, "webite_purchase"),
         where("status", "==", "approved"),
         where("exported", "==", false)
       );
@@ -136,10 +134,8 @@ const Dashboard = () => {
   // Fetch total count of USSD transactions
   const fetchTotalUssd = async () => {
     try {
-      const today = getTodayStart();
       const q = query(
-        collection(db, "teller-response-calls"),
-        where("createdAt", ">=", today),
+        collection(db, "data_purchase"),
         where("status", "==", "approved"),
         where("exported", "==", false)
       );
@@ -210,10 +206,8 @@ const Dashboard = () => {
 
     try {
       setLoading(true);
-      const today = getTodayStart();
       let q = query(
-        collection(db, "data_approve_teller_transaction"),
-        where("createdAt", ">=", today),
+        collection(db, "webite_purchase"),
         where("status", "==", "approved"),
         where("exported", "==", false),
         orderBy("createdAt"),
@@ -222,8 +216,8 @@ const Dashboard = () => {
 
       if (page > 1 && transactionsLastDocs[page - 2]) {
         q = query(
-          collection(db, "data_approve_teller_transaction"),
-          where("createdAt", ">=", today),
+          collection(db, "webite_purchase"),
+
           where("status", "==", "approved"),
           where("exported", "==", false),
           orderBy("createdAt"),
@@ -250,6 +244,7 @@ const Dashboard = () => {
       setLoading(false);
     } catch (err) {
       setError("Failed to fetch transactions: " + err.message);
+      console.log(err.message)
       setLoading(false);
     }
   };
@@ -264,10 +259,8 @@ const Dashboard = () => {
 
     try {
       setLoading(true);
-      const today = getTodayStart();
       let q = query(
-        collection(db, "teller-response-calls"),
-        where("createdAt", ">=", today),
+        collection(db, "data_purchase"),
         where("status", "==", "approved"),
         where("exported", "==", false),
         orderBy("createdAt"),
@@ -276,8 +269,8 @@ const Dashboard = () => {
 
       if (page > 1 && ussdLastDocs[page - 2]) {
         q = query(
-          collection(db, "teller-response-calls"),
-          where("createdAt", ">=", today),
+          collection(db, "data_purchase"),
+
           where("status", "==", "approved"),
           where("exported", "==", false),
           orderBy("createdAt"),
@@ -304,6 +297,7 @@ const Dashboard = () => {
       setLoading(false);
     } catch (err) {
       setError("Failed to fetch USSD transactions: " + err.message);
+      console.log(err.message);
       setLoading(false);
     }
   };
@@ -372,10 +366,8 @@ const Dashboard = () => {
   const handleDownloadTransactions = async () => {
     try {
       setLoading(true);
-      const today = getTodayStart();
       const q = query(
-        collection(db, "data_approve_teller_transaction"),
-        where("createdAt", ">=", today),
+        collection(db, "webite_purchase"),
         where("status", "==", "approved"),
         where("exported", "==", false),
         limit(maxExportRecords)
@@ -383,10 +375,8 @@ const Dashboard = () => {
       const querySnapshot = await getDocs(q);
       const docs = querySnapshot.docs;
       const data = docs.map((doc) => ({
-        Number: formatPhoneNumber(
-          doc.data().subscriber_number || doc.data().number
-        ),
-        GB: doc.data().gb || extractGB(doc.data().desc) || "N/A",
+        Number: formatPhoneNumber(doc.data().phoneNumber),
+        GB:extractGB(doc.data().serviceName) || "N/A",
       }));
 
       setRecordCount(docs.length);
@@ -396,7 +386,7 @@ const Dashboard = () => {
         const batch = writeBatch(db);
         const batchDocs = docs.slice(i, i + batchSize);
         batchDocs.forEach((docSnap) => {
-          const docRef = doc(db, "data_approve_teller_transaction", docSnap.id);
+          const docRef = doc(db, "webite_purchase", docSnap.id);
           batch.update(docRef, { exported: true });
         });
         await batch.commit();
@@ -423,10 +413,9 @@ const Dashboard = () => {
   const handleDownloadUssd = async () => {
     try {
       setLoading(true);
-      const today = getTodayStart();
+
       const q = query(
-        collection(db, "teller-response-calls"),
-        where("createdAt", ">=", today),
+        collection(db, "data_purchase"),
         where("status", "==", "approved"),
         where("exported", "==", false),
         limit(maxExportRecords)
@@ -434,10 +423,8 @@ const Dashboard = () => {
       const querySnapshot = await getDocs(q);
       const docs = querySnapshot.docs;
       const data = docs.map((doc) => ({
-        Number: formatPhoneNumber(
-          doc.data().subscriber_number || doc.data().number
-        ),
-        GB: doc.data().gb || extractGB(doc.data().desc) || "N/A",
+        Number: formatPhoneNumber(doc.data().phoneNumber),
+        GB: extractGB(doc.data().serviceName) || "N/A",
       }));
 
       setRecordCount(docs.length);
@@ -447,7 +434,7 @@ const Dashboard = () => {
         const batch = writeBatch(db);
         const batchDocs = docs.slice(i, i + batchSize);
         batchDocs.forEach((docSnap) => {
-          const docRef = doc(db, "teller-response-calls", docSnap.id);
+          const docRef = doc(db, "data_purchase", docSnap.id);
           batch.update(docRef, { exported: true });
         });
         await batch.commit();
@@ -485,16 +472,14 @@ const Dashboard = () => {
         );
       } else if (tabValue === 1) {
         q = query(
-          collection(db, "data_approve_teller_transaction"),
-          where("createdAt", ">=", getTodayStart()),
+          collection(db, "webite_purchase"),
           where("status", "==", "approved"),
           where("exported", "==", false),
           limit(maxExportRecords)
         );
       } else if (tabValue === 2) {
         q = query(
-          collection(db, "teller-response-calls"),
-          where("createdAt", ">=", getTodayStart()),
+          collection(db, "data_purchase"),
           where("status", "==", "approved"),
           where("exported", "==", false),
           limit(maxExportRecords)
@@ -722,7 +707,7 @@ const Dashboard = () => {
         </div>
       )}
 
-      {/* Transactions Tab (data_approve_teller_transaction collection) */}
+      {/* Transactions Tab (webite_purchase collection) */}
       {tabValue === 1 && !loading && !error && (
         <div className="mt-6">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
@@ -754,11 +739,11 @@ const Dashboard = () => {
                       <span className="font-semibold text-gray-700">
                         Number:
                       </span>{" "}
-                      {formatPhoneNumber(tx.subscriber_number || tx.number)}
+                      {formatPhoneNumber(tx.phoneNumber)}
                     </p>
                     <p className="text-sm sm:text-base">
                       <span className="font-semibold text-gray-700">GB:</span>{" "}
-                      {tx.gb || extractGB(tx.desc) || "N/A"}
+                      {extractGB(tx.serviceName) || "N/A"}
                     </p>
                   </div>
                 ))}
@@ -799,7 +784,7 @@ const Dashboard = () => {
         </div>
       )}
 
-      {/* USSD Transactions Tab (teller-response-calls collection) */}
+      {/* USSD Transactions Tab (data_purchase collection) */}
       {tabValue === 2 && !loading && !error && (
         <div className="mt-6">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
@@ -831,11 +816,11 @@ const Dashboard = () => {
                       <span className="font-semibold text-gray-700">
                         Number:
                       </span>{" "}
-                      {formatPhoneNumber(tx.subscriber_number || tx.number)}
+                      {formatPhoneNumber(tx.phoneNumber)}
                     </p>
                     <p className="text-sm sm:text-base">
                       <span className="font-semibold text-gray-700">GB:</span>{" "}
-                      {tx.gb || extractGB(tx.desc) || "N/A"}
+                      {extractGB(tx.serviceName) || "N/A"}
                     </p>
                   </div>
                 ))}
