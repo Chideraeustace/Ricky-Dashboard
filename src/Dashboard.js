@@ -1,38 +1,39 @@
+/* eslint-disable no-unused-vars */
 import React, { useState, useEffect, useCallback } from "react";
 import {
   collection,
   query,
   where,
   getDocs,
-  limit,
-  startAfter,
-  orderBy,
-  writeBatch,
-  doc,
+  writeBatch, // <-- needed for batch updates
 } from "firebase/firestore";
 import { db } from "./firebase";
 import * as XLSX from "xlsx";
 
-// --- Utilities ---
-const extractGB = (desc) => {
-  if (!desc) return "N/A";
-  const match = desc.match(/(\d+)GB/);
-  return match ? match[1] : "N/A";
-};
+import NumbersTab from "./components/NumbersTab";
+import WebsiteTransactionsTab from "./components/WebsiteTransactionsTab";
+import UssdTransactionsTab from "./components/UssdTransactionsTab";
 
+/* ------------------------------------------------------------------ */
+/*  Helpers (used only inside this file)                              */
+/* ------------------------------------------------------------------ */
 const formatPhoneNumber = (number) => {
   if (!number) return "N/A";
-  const cleanedNumber = number.replace(/^233/, "");
-  return cleanedNumber.length === 9
-    ? `0${cleanedNumber}`
-    : cleanedNumber || "N/A";
+  const cleaned = number.toString().replace(/^233/, "").trim();
+  return cleaned.length === 9 ? `0${cleaned}` : cleaned || "N/A";
+};
+
+const extractGB = (desc) => {
+  if (!desc) return "N/A";
+  const m = desc.match(/(\d+)GB/i);
+  return m ? m[1] : "N/A";
 };
 
 const downloadExcel = (data, fileName, headers) => {
-  const worksheet = XLSX.utils.json_to_sheet(data, { header: headers });
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, "Sheet1");
-  XLSX.writeFile(workbook, fileName);
+  const ws = XLSX.utils.json_to_sheet(data, { header: headers });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+  XLSX.writeFile(wb, `${fileName}.xlsx`);
 };
 
 const debounce = (func, wait) => {
@@ -43,70 +44,66 @@ const debounce = (func, wait) => {
   };
 };
 
-// NEW: Unique key — ONLY for USSD (externalRef)
-const getUniqueKey = (record) => {
-  return record.externalRef || "";
-};
-
-// --- Component ---
+/* ------------------------------------------------------------------ */
+/*  Dashboard component                                               */
+/* ------------------------------------------------------------------ */
 const Dashboard = () => {
+  /* -------------------------- State -------------------------- */
   const [tabValue, setTabValue] = useState(0);
+
   const [numbers, setNumbers] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [ussdTransactions, setUssdTransactions] = useState([]);
-  const [loading, setLoading] = useState(true);
+
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
   const [numbersPage, setNumbersPage] = useState(1);
   const [transactionsPage, setTransactionsPage] = useState(1);
   const [ussdPage, setUssdPage] = useState(1);
-  const [numbersLastDocs, setNumbersLastDocs] = useState([]);
-  const [transactionsLastDocs, setTransactionsLastDocs] = useState([]);
-  const [ussdLastDocs, setUssdLastDocs] = useState([]);
   const [hasMoreNumbers, setHasMoreNumbers] = useState(true);
   const [hasMoreTransactions, setHasMoreTransactions] = useState(true);
   const [hasMoreUssd, setHasMoreUssd] = useState(true);
-  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
-  const [confirmAction, setConfirmAction] = useState(null);
-  const [recordCount, setRecordCount] = useState(0);
-  const [numbersCache, setNumbersCache] = useState({});
-  const [transactionsCache, setTransactionsCache] = useState({});
-  const [ussdCache, setUssdCache] = useState({});
+
   const [totalNumbers, setTotalNumbers] = useState(0);
   const [totalTransactions, setTotalTransactions] = useState(0);
   const [totalUssd, setTotalUssd] = useState(0);
+
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const [confirmAction, setConfirmAction] = useState(null);
+  const [recordCount, setRecordCount] = useState(0);
+
   const pageSize = 6;
   const maxExportRecords = 1000;
   const batchSize = 500;
 
+  /* ----------------------- Tab handling ---------------------- */
   const handleTabChange = (newValue) => {
     setTabValue(newValue);
+    setError(null);
     if (newValue === 0) {
       setNumbersPage(1);
-      setNumbersLastDocs([]);
       setHasMoreNumbers(true);
     } else if (newValue === 1) {
       setTransactionsPage(1);
-      setTransactionsLastDocs([]);
       setHasMoreTransactions(true);
     } else if (newValue === 2) {
       setUssdPage(1);
-      setUssdLastDocs([]);
       setHasMoreUssd(true);
     }
-    setError(null);
   };
 
-  // --- Total Counts ---
+  /* -------------------------- Totals -------------------------- */
   const fetchTotalNumbers = async () => {
     try {
       const q = query(
         collection(db, "entries"),
         where("exported", "==", false)
       );
-      const s = await getDocs(q);
-      setTotalNumbers(s.size);
-    } catch (err) {
-      setError("Failed to fetch total numbers: " + err.message);
+      const snap = await getDocs(q);
+      setTotalNumbers(snap.size);
+    } catch (e) {
+      setError("Failed to fetch total numbers: " + e.message);
     }
   };
 
@@ -117,10 +114,10 @@ const Dashboard = () => {
         where("status", "==", "approved"),
         where("exported", "==", false)
       );
-      const s = await getDocs(q);
-      setTotalTransactions(s.size);
-    } catch (err) {
-      setError("Failed to fetch total transactions: " + err.message);
+      const snap = await getDocs(q);
+      setTotalTransactions(snap.size);
+    } catch (e) {
+      setError("Failed to fetch total transactions: " + e.message);
     }
   };
 
@@ -131,173 +128,94 @@ const Dashboard = () => {
         where("status", "==", "approved"),
         where("exported", "==", false)
       );
-      const s = await getDocs(q);
-      setTotalUssd(s.size);
-    } catch (err) {
-      setError("Failed to fetch total USSD: " + err.message);
+      const snap = await getDocs(q);
+      const count = snap.docs.filter(
+        (d) => d.data().error === undefined
+      ).length;
+      setTotalUssd(count);
+    } catch (e) {
+      setError("Failed to fetch total USSD: " + e.message);
     }
   };
 
-  // --- Fetch Numbers (NO DEDUPE) ---
-  const fetchNumbers = async (page = 1) => {
-    if (numbersCache[page]) {
-      setNumbers(numbersCache[page]);
-      setLoading(false);
-      return;
-    }
+  /* -------------------------- Fetchers -------------------------- */
+  const fetchNumbers = async () => {
+    setLoading(true);
     try {
-      setLoading(true);
-      let q = query(
+      const q = query(
         collection(db, "entries"),
-        where("exported", "==", false),
-        orderBy("phoneNumber"),
-        limit(pageSize)
+        where("exported", "==", false)
       );
-      if (page > 1 && numbersLastDocs[page - 2]) {
-        q = query(
-          collection(db, "entries"),
-          where("exported", "==", false),
-          orderBy("phoneNumber"),
-          startAfter(numbersLastDocs[page - 2]),
-          limit(pageSize)
-        );
-      }
-      const s = await getDocs(q);
-      const data = s.docs.map((d) => ({ id: d.id, ...d.data() }));
-
+      const snap = await getDocs(q);
+      const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       setNumbers(data);
-      setNumbersCache((p) => ({ ...p, [page]: data }));
-      if (s.docs.length > 0) {
-        const ld = [...numbersLastDocs];
-        ld[page - 1] = s.docs[s.docs.length - 1];
-        setNumbersLastDocs(ld);
-      }
-      setHasMoreNumbers(s.docs.length === pageSize);
-      setLoading(false);
-    } catch (err) {
-      setError("Failed to fetch numbers: " + err.message);
+      setHasMoreNumbers(data.length === pageSize);
+    } catch (e) {
+      setError("Failed to fetch numbers: " + e.message);
+    } finally {
       setLoading(false);
     }
   };
 
-  // --- Fetch Website Transactions (NO DEDUPE) ---
-  const fetchTransactions = async (page = 1) => {
-    if (transactionsCache[page]) {
-      setTransactions(transactionsCache[page]);
-      setLoading(false);
-      return;
-    }
+  const fetchTransactions = async () => {
+    setLoading(true);
     try {
-      setLoading(true);
-      let q = query(
+      const q = query(
         collection(db, "webite_purchase"),
         where("status", "==", "approved"),
-        where("exported", "==", false),
-        orderBy("createdAt"),
-        limit(pageSize)
+        where("exported", "==", false)
       );
-      if (page > 1 && transactionsLastDocs[page - 2]) {
-        q = query(
-          collection(db, "webite_purchase"),
-          where("status", "==", "approved"),
-          where("exported", "==", false),
-          orderBy("createdAt"),
-          startAfter(transactionsLastDocs[page - 2]),
-          limit(pageSize)
-        );
-      }
-      const s = await getDocs(q);
-      const data = s.docs.map((d) => ({ id: d.id, ...d.data() }));
-
+      const snap = await getDocs(q);
+      const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       setTransactions(data);
-      setTransactionsCache((p) => ({ ...p, [page]: data }));
-      if (s.docs.length > 0) {
-        const ld = [...transactionsLastDocs];
-        ld[page - 1] = s.docs[s.docs.length - 1];
-        setTransactionsLastDocs(ld);
-      }
-      setHasMoreTransactions(s.docs.length === pageSize);
-      setLoading(false);
-    } catch (err) {
-      setError("Failed to fetch transactions: " + err.message);
+      setHasMoreTransactions(data.length === pageSize);
+    } catch (e) {
+      setError("Failed to fetch transactions: " + e.message);
+    } finally {
       setLoading(false);
     }
   };
 
-  // --- Fetch USSD Transactions (DEDUPE by externalRef) ---
-  const fetchUssdTransactions = async (page = 1) => {
-    if (ussdCache[page]) {
-      setUssdTransactions(ussdCache[page]);
-      setLoading(false);
-      return;
-    }
+  const fetchUssdTransactions = async () => {
+    setLoading(true);
     try {
-      setLoading(true);
-      let q = query(
+      const q = query(
         collection(db, "data_purchase"),
         where("status", "==", "approved"),
-        where("exported", "==", false),
-        limit(pageSize)
+        where("exported", "==", false)
       );
-      if (page > 1 && ussdLastDocs[page - 2]) {
-        q = query(
-          collection(db, "data_purchase"),
-          where("status", "==", "approved"),
-          where("exported", "==", false),
-          startAfter(ussdLastDocs[page - 2]),
-          limit(pageSize)
-        );
-      }
-      const s = await getDocs(q);
-      const raw = s.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const snap = await getDocs(q);
+      const raw = snap.docs
+        .map((d) => ({ id: d.id, ref: d.ref, ...d.data() }))
+        .filter((doc) => doc.error === undefined);
 
       const seen = new Set();
       const data = raw.filter((r) => {
-        const key = getUniqueKey(r);
+        const key = r.externalRef || r.id;
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
       });
 
       setUssdTransactions(data);
-      setUssdCache((p) => ({ ...p, [page]: data }));
-      if (s.docs.length > 0) {
-        const ld = [...ussdLastDocs];
-        ld[page - 1] = s.docs[s.docs.length - 1];
-        setUssdLastDocs(ld);
-      }
-      setHasMoreUssd(s.docs.length === pageSize);
-      setLoading(false);
-    } catch (err) {
-      setError("Failed to fetch USSD transactions: " + err.message);
+      setHasMoreUssd(data.length === pageSize);
+    } catch (e) {
+      setError("Failed to fetch USSD: " + e.message);
+    } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => {
-    if (tabValue === 0) {
-      fetchNumbers(numbersPage);
-      fetchTotalNumbers();
-    } else if (tabValue === 1) {
-      fetchTransactions(transactionsPage);
-      fetchTotalTransactions();
-    } else if (tabValue === 2) {
-      fetchUssdTransactions(ussdPage);
-      fetchTotalUssd();
-    }
-  }, [tabValue, numbersPage, transactionsPage, ussdPage]);
-
-  // --- Export: Numbers (NO DEDUPE) ---
+  /* -------------------------- Export Handlers -------------------------- */
   const handleDownloadNumbers = async () => {
     try {
       setLoading(true);
       const q = query(
         collection(db, "entries"),
-        where("exported", "==", false),
-        limit(maxExportRecords)
+        where("exported", "==", false)
       );
-      const s = await getDocs(q);
-      const docs = s.docs;
+      const snap = await getDocs(q);
+      const docs = snap.docs.slice(0, maxExportRecords);
 
       const data = docs.map((d) => ({
         "Phone Number": formatPhoneNumber(d.data().phoneNumber),
@@ -306,43 +224,35 @@ const Dashboard = () => {
 
       setRecordCount(docs.length);
 
+      // ---- BATCH UPDATE (writeBatch) ----
       for (let i = 0; i < docs.length; i += batchSize) {
         const batch = writeBatch(db);
-        const batchDocs = docs.slice(i, i + batchSize);
-        batchDocs.forEach((d) => {
-          const ref = doc(db, "entries", d.id);
-          batch.update(ref, { exported: true });
-        });
+        docs
+          .slice(i, i + batchSize)
+          .forEach((d) => batch.update(d.ref, { exported: true }));
         await batch.commit();
       }
 
-      downloadExcel(data, "Numbers.xlsx", ["Phone Number", "Network Provider"]);
-
-      setNumbersCache({});
-      setNumbersPage(1);
-      setNumbersLastDocs([]);
-      setHasMoreNumbers(true);
-      await fetchNumbers(1);
+      downloadExcel(data, "Numbers", ["Phone Number", "Network Provider"]);
+      await fetchNumbers();
       await fetchTotalNumbers();
-    } catch (err) {
-      setError("Failed to download numbers: " + err.message);
+    } catch (e) {
+      setError("Export failed: " + e.message);
     } finally {
       setLoading(false);
     }
   };
 
-  // --- Export: Website Transactions (NO DEDUPE) ---
   const handleDownloadTransactions = async () => {
     try {
       setLoading(true);
       const q = query(
         collection(db, "webite_purchase"),
         where("status", "==", "approved"),
-        where("exported", "==", false),
-        limit(maxExportRecords)
+        where("exported", "==", false)
       );
-      const s = await getDocs(q);
-      const docs = s.docs;
+      const snap = await getDocs(q);
+      const docs = snap.docs.slice(0, maxExportRecords);
 
       const data = docs.map((d) => ({
         Number: formatPhoneNumber(d.data().phoneNumber),
@@ -353,130 +263,116 @@ const Dashboard = () => {
 
       for (let i = 0; i < docs.length; i += batchSize) {
         const batch = writeBatch(db);
-        const batchDocs = docs.slice(i, i + batchSize);
-        batchDocs.forEach((d) => {
-          const ref = doc(db, "webite_purchase", d.id);
-          batch.update(ref, { exported: true });
-        });
+        docs
+          .slice(i, i + batchSize)
+          .forEach((d) => batch.update(d.ref, { exported: true }));
         await batch.commit();
       }
 
-      downloadExcel(data, "Transactions.xlsx", ["Number", "GB"]);
-
-      setTransactionsCache({});
-      setTransactionsPage(1);
-      setTransactionsLastDocs([]);
-      setHasMoreTransactions(true);
-      await fetchTransactions(1);
+      downloadExcel(data, "Transactions", ["Number", "GB"]);
+      await fetchTransactions();
       await fetchTotalTransactions();
-    } catch (err) {
-      setError("Failed to download transactions: " + err.message);
+    } catch (e) {
+      setError("Export failed: " + e.message);
     } finally {
       setLoading(false);
     }
   };
 
-  // --- Export: USSD (DEDUPE by externalRef) ---
   const handleDownloadUssd = async () => {
     try {
       setLoading(true);
       const q = query(
         collection(db, "data_purchase"),
         where("status", "==", "approved"),
-        where("exported", "==", false),
-        limit(maxExportRecords)
+        where("exported", "==", false)
       );
-      const s = await getDocs(q);
-      const docs = s.docs;
+      const snap = await getDocs(q);
+      let docs = snap.docs
+        .map((d) => ({ id: d.id, ref: d.ref, data: d.data() }))
+        .filter((d) => d.data.error === undefined)
+        .slice(0, maxExportRecords);
 
-      const seen = new Set();
-      const uniqueDocs = docs.filter((d) => {
-        const key = getUniqueKey(d.data());
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
+      // Group by unique key
+      const keyToDocs = {};
+      docs.forEach((d) => {
+        const key = d.data.externalRef || d.id;
+        if (!keyToDocs[key]) keyToDocs[key] = [];
+        keyToDocs[key].push(d);
       });
 
-      const data = uniqueDocs.map((d) => ({
-        Number: formatPhoneNumber(d.data().phoneNumber),
-        GB: extractGB(d.data().serviceName) || "N/A",
-      }));
+      const exportRows = Object.keys(keyToDocs).map((key) => {
+        const first = keyToDocs[key][0].data;
+        return {
+          Number: formatPhoneNumber(first.phoneNumber),
+          GB: extractGB(first.serviceName) || "N/A",
+        };
+      });
 
-      setRecordCount(uniqueDocs.length);
+      setRecordCount(exportRows.length);
 
-      for (let i = 0; i < uniqueDocs.length; i += batchSize) {
+      // ---- MARK ALL DUPLICATES AS EXPORTED ----
+      for (let i = 0; i < docs.length; i += batchSize) {
         const batch = writeBatch(db);
-        const batchDocs = uniqueDocs.slice(i, i + batchSize);
-        batchDocs.forEach((d) => {
-          const ref = doc(db, "data_purchase", d.id);
-          batch.update(ref, { exported: true });
-        });
+        docs
+          .slice(i, i + batchSize)
+          .forEach((d) => batch.update(d.ref, { exported: true }));
         await batch.commit();
       }
 
-      downloadExcel(data, "UssdTransactions.xlsx", ["Number", "GB"]);
-
-      setUssdCache({});
-      setUssdPage(1);
-      setUssdLastDocs([]);
-      setHasMoreUssd(true);
-      await fetchUssdTransactions(1);
+      downloadExcel(exportRows, "UssdTransactions", ["Number", "GB"]);
+      await fetchUssdTransactions();
       await fetchTotalUssd();
-    } catch (err) {
-      setError("Failed to download USSD: " + err.message);
+    } catch (e) {
+      setError("USSD export failed: " + e.message);
     } finally {
       setLoading(false);
     }
   };
 
-  // --- Confirm Dialog: Unique count only for USSD ---
+  /* -------------------------- Confirm Dialog -------------------------- */
   const openConfirmDialog = async (action) => {
     try {
       setLoading(true);
-      let q;
+      let count = 0;
       if (tabValue === 0) {
-        q = query(
+        const q = query(
           collection(db, "entries"),
-          where("exported", "==", false),
-          limit(maxExportRecords)
+          where("exported", "==", false)
         );
+        const snap = await getDocs(q);
+        count = snap.size;
       } else if (tabValue === 1) {
-        q = query(
+        const q = query(
           collection(db, "webite_purchase"),
           where("status", "==", "approved"),
-          where("exported", "==", false),
-          limit(maxExportRecords)
+          where("exported", "==", false)
         );
+        const snap = await getDocs(q);
+        count = snap.size;
       } else if (tabValue === 2) {
-        q = query(
+        const q = query(
           collection(db, "data_purchase"),
           where("status", "==", "approved"),
-          where("exported", "==", false),
-          limit(maxExportRecords)
+          where("exported", "==", false)
         );
-      }
-
-      const s = await getDocs(q);
-      const raw = s.docs.map((d) => d.data());
-
-      let count;
-      if (tabValue === 2) {
+        const snap = await getDocs(q);
+        const raw = snap.docs.map((d) => d.data());
         const seen = new Set();
-        count = raw.filter((r) => {
-          const key = getUniqueKey(r);
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        }).length;
-      } else {
-        count = raw.length;
+        count = raw
+          .filter((r) => r.error === undefined)
+          .filter((r) => {
+            const k = r.externalRef || r.id;
+            if (seen.has(k)) return false;
+            seen.add(k);
+            return true;
+          }).length;
       }
-
       setRecordCount(count);
       setConfirmAction(() => action);
       setShowConfirmDialog(true);
-    } catch (err) {
-      setError("Failed to fetch record count: " + err.message);
+    } catch (e) {
+      setError("Failed to count records: " + e.message);
     } finally {
       setLoading(false);
     }
@@ -493,6 +389,7 @@ const Dashboard = () => {
     closeConfirmDialog();
   };
 
+  /* -------------------------- Pagination -------------------------- */
   const handlePrevPage = useCallback(
     debounce(() => {
       if (tabValue === 0 && numbersPage > 1) setNumbersPage((p) => p - 1);
@@ -500,7 +397,7 @@ const Dashboard = () => {
         setTransactionsPage((p) => p - 1);
       else if (tabValue === 2 && ussdPage > 1) setUssdPage((p) => p - 1);
     }, 300),
-    [tabValue]
+    [tabValue, numbersPage, transactionsPage, ussdPage]
   );
 
   const handleNextPage = useCallback(
@@ -513,13 +410,28 @@ const Dashboard = () => {
     [tabValue, hasMoreNumbers, hasMoreTransactions, hasMoreUssd]
   );
 
+  /* -------------------------- Effects -------------------------- */
+  useEffect(() => {
+    if (tabValue === 0) {
+      fetchNumbers();
+      fetchTotalNumbers();
+    } else if (tabValue === 1) {
+      fetchTransactions();
+      fetchTotalTransactions();
+    } else if (tabValue === 2) {
+      fetchUssdTransactions();
+      fetchTotalUssd();
+    }
+  }, [tabValue]);
+
   useEffect(() => {
     if (error) {
-      const timer = setTimeout(() => setError(null), 5000);
-      return () => clearTimeout(timer);
+      const t = setTimeout(() => setError(null), 5000);
+      return () => clearTimeout(t);
     }
   }, [error]);
 
+  /* -------------------------- Render -------------------------- */
   return (
     <div className="w-full max-w-7xl mx-auto p-4 sm:p-6 lg:p-8 min-h-screen bg-gray-100">
       {/* Confirm Dialog */}
@@ -560,276 +472,64 @@ const Dashboard = () => {
 
       {/* Tabs */}
       <div className="flex flex-wrap border-b border-gray-300 bg-white rounded-lg shadow-sm mb-6">
-        <button
-          className={`flex-1 px-4 py-3 text-sm font-semibold transition-colors duration-200 sm:text-base ${
-            tabValue === 0
-              ? "border-b-4 border-blue-600 text-blue-600 bg-blue-50"
-              : "text-gray-600 hover:text-blue-600 hover:bg-gray-50"
-          }`}
-          onClick={() => handleTabChange(0)}
-        >
-          Numbers
-        </button>
-        <button
-          className={`flex-1 px-4 py-3 text-sm font-semibold transition-colors duration-200 sm:text-base ${
-            tabValue === 1
-              ? "border-b-4 border-blue-600 text-blue-600 bg-blue-50"
-              : "text-gray-600 hover:text-blue-600 hover:bg-gray-50"
-          }`}
-          onClick={() => handleTabChange(1)}
-        >
-          Website Transactions
-        </button>
-        <button
-          className={`flex-1 px-4 py-3 text-sm font-semibold transition-colors duration-200 sm:text-base ${
-            tabValue === 2
-              ? "border-b-4 border-blue-600 text-blue-600 bg-blue-50"
-              : "text-gray-600 hover:text-blue-600 hover:bg-gray-50"
-          }`}
-          onClick={() => handleTabChange(2)}
-        >
-          USSD Transactions
-        </button>
+        {["Numbers", "Website Transactions", "USSD Transactions"].map(
+          (label, i) => (
+            <button
+              key={i}
+              className={`flex-1 px-4 py-3 text-sm font-semibold transition-colors duration-200 sm:text-base ${
+                tabValue === i
+                  ? "border-b-4 border-blue-600 text-blue-600 bg-blue-50"
+                  : "text-gray-600 hover:text-blue-600 hover:bg-gray-50"
+              }`}
+              onClick={() => handleTabChange(i)}
+            >
+              {label}
+            </button>
+          )
+        )}
       </div>
 
-      {loading && (
-        <div className="mt-6 flex justify-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-600"></div>
-        </div>
+      {/* Tab Content */}
+      {tabValue === 0 && (
+        <NumbersTab
+          numbers={numbers}
+          totalNumbers={totalNumbers}
+          numbersPage={numbersPage}
+          hasMoreNumbers={hasMoreNumbers}
+          loading={loading}
+          error={error}
+          onPrevPage={handlePrevPage}
+          onNextPage={handleNextPage}
+          onDownload={() => openConfirmDialog(handleDownloadNumbers)}
+        />
       )}
 
-      {!loading && error && (
-        <p className="mt-6 text-center text-red-500 text-lg">{error}</p>
+      {tabValue === 1 && (
+        <WebsiteTransactionsTab
+          transactions={transactions}
+          totalTransactions={totalTransactions}
+          transactionsPage={transactionsPage}
+          hasMoreTransactions={hasMoreTransactions}
+          loading={loading}
+          error={error}
+          onPrevPage={handlePrevPage}
+          onNextPage={handleNextPage}
+          onDownload={() => openConfirmDialog(handleDownloadTransactions)}
+        />
       )}
 
-      {/* Numbers Tab */}
-      {tabValue === 0 && !loading && !error && (
-        <div className="mt-6">
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
-            <h2 className="text-xl sm:text-2xl font-bold text-gray-800">
-              New Numbers
-            </h2>
-            {numbers.length > 0 && (
-              <button
-                onClick={() => openConfirmDialog(handleDownloadNumbers)}
-                className="mt-2 sm:mt-0 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm sm:text-base shadow-md"
-              >
-                Download Numbers (Excel)
-              </button>
-            )}
-          </div>
-          <p className="text-sm text-gray-600 mb-4">
-            Total Records: {totalNumbers} | Page: {numbers.length} (Page{" "}
-            {numbersPage})
-          </p>
-          {numbers.length > 0 ? (
-            <>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {numbers.map((num) => (
-                  <div
-                    key={num.id}
-                    className="p-4 bg-white rounded-lg shadow-md hover:shadow-lg"
-                  >
-                    <p>
-                      <span className="font-semibold">Phone:</span>{" "}
-                      {formatPhoneNumber(num.phoneNumber)}
-                    </p>
-                    <p>
-                      <span className="font-semibold">Network:</span>{" "}
-                      {num.networkProvider || "N/A"}
-                    </p>
-                  </div>
-                ))}
-              </div>
-              <div className="flex justify-between items-center mt-6">
-                <button
-                  onClick={handlePrevPage}
-                  disabled={numbersPage === 1}
-                  className={`px-4 py-2 rounded-lg text-sm sm:text-base ${
-                    numbersPage === 1
-                      ? "bg-gray-300 text-gray-500"
-                      : "bg-blue-600 text-white hover:bg-blue-700"
-                  }`}
-                >
-                  Previous
-                </button>
-                <span className="text-sm sm:text-base text-gray-600">
-                  Page {numbersPage}
-                </span>
-                <button
-                  onClick={handleNextPage}
-                  disabled={!hasMoreNumbers}
-                  className={`px-4 py-2 rounded-lg text-sm sm:text-base ${
-                    !hasMoreNumbers
-                      ? "bg-gray-300 text-gray-500"
-                      : "bg-blue-600 text-white hover:bg-blue-700"
-                  }`}
-                >
-                  Next
-                </button>
-              </div>
-            </>
-          ) : (
-            <p className="text-gray-600 text-center text-lg">
-              No numbers found.
-            </p>
-          )}
-        </div>
-      )}
-
-      {/* Website Transactions */}
-      {tabValue === 1 && !loading && !error && (
-        <div className="mt-6">
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
-            <h2 className="text-xl sm:text-2xl font-bold text-gray-800">
-              Today's Transactions
-            </h2>
-            {transactions.length > 0 && (
-              <button
-                onClick={() => openConfirmDialog(handleDownloadTransactions)}
-                className="mt-2 sm:mt-0 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm sm:text-base shadow-md"
-              >
-                Download Transactions (Excel)
-              </button>
-            )}
-          </div>
-          <p className="text-sm text-gray-600 mb-4">
-            Total Records: {totalTransactions} | Page: {transactions.length}{" "}
-            (Page {transactionsPage})
-          </p>
-          {transactions.length > 0 ? (
-            <>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {transactions.map((tx) => (
-                  <div
-                    key={tx.id}
-                    className="p-4 bg-white rounded-lg shadow-md hover:shadow-lg"
-                  >
-                    <p>
-                      <span className="font-semibold">Number:</span>{" "}
-                      {formatPhoneNumber(tx.phoneNumber)}
-                    </p>
-                    <p>
-                      <span className="font-semibold">GB:</span>{" "}
-                      {extractGB(tx.serviceName) || "N/A"}
-                    </p>
-                  </div>
-                ))}
-              </div>
-              <div className="flex justify-between items-center mt-6">
-                <button
-                  onClick={handlePrevPage}
-                  disabled={transactionsPage === 1}
-                  className={`px-4 py-2 rounded-lg text-sm sm:text-base ${
-                    transactionsPage === 1
-                      ? "bg-gray-300 text-gray-500"
-                      : "bg-blue-600 text-white hover:bg-blue-700"
-                  }`}
-                >
-                  Previous
-                </button>
-                <span className="text-sm sm:text-base text-gray-600">
-                  Page {transactionsPage}
-                </span>
-                <button
-                  onClick={handleNextPage}
-                  disabled={!hasMoreTransactions}
-                  className={`px-4 py-2 rounded-lg text-sm sm:text-base ${
-                    !hasMoreTransactions
-                      ? "bg-gray-300 text-gray-500"
-                      : "bg-blue-600 text-white hover:bg-blue-700"
-                  }`}
-                >
-                  Next
-                </button>
-              </div>
-            </>
-          ) : (
-            <p className="text-gray-600 text-center text-lg">
-              No transactions found.
-            </p>
-          )}
-        </div>
-      )}
-
-      {/* USSD Transactions */}
-      {tabValue === 2 && !loading && !error && (
-        <div className="mt-6">
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
-            <h2 className="text-xl sm:text-2xl font-bold text-gray-800">
-              Today's USSD Transactions
-            </h2>
-            {ussdTransactions.length > 0 && (
-              <button
-                onClick={() => openConfirmDialog(handleDownloadUssd)}
-                className="mt-2 sm:mt-0 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm sm:text-base shadow-md"
-              >
-                Download USSD (Excel)
-              </button>
-            )}
-          </div>
-          <p className="text-sm text-gray-600 mb-4">
-            Total Raw Records: {totalUssd} | Unique on Page:{" "}
-            {ussdTransactions.length} (Page {ussdPage})
-          </p>
-          {ussdTransactions.length > 0 ? (
-            <>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {ussdTransactions.map((tx) => (
-                  <div
-                    key={tx.id}
-                    className="p-4 bg-white rounded-lg shadow-md hover:shadow-lg"
-                  >
-                    <p>
-                      <span className="font-semibold">Number:</span>{" "}
-                      {formatPhoneNumber(tx.phoneNumber)}
-                    </p>
-                    <p>
-                      <span className="font-semibold">GB:</span>{" "}
-                      {extractGB(tx.serviceName) || "N/A"}
-                    </p>
-                    {tx.externalRef && (
-                      <p className="text-xs text-gray-500 mt-1">
-                        Ref: {tx.externalRef}
-                      </p>
-                    )}
-                  </div>
-                ))}
-              </div>
-              <div className="flex justify-between items-center mt-6">
-                <button
-                  onClick={handlePrevPage}
-                  disabled={ussdPage === 1}
-                  className={`px-4 py-2 rounded-lg text-sm sm:text-base ${
-                    ussdPage === 1
-                      ? "bg-gray-300 text-gray-500"
-                      : "bg-blue-600 text-white hover:bg-blue-700"
-                  }`}
-                >
-                  Previous
-                </button>
-                <span className="text-sm sm:text-base text-gray-600">
-                  Page {ussdPage}
-                </span>
-                <button
-                  onClick={handleNextPage}
-                  disabled={!hasMoreUssd}
-                  className={`px-4 py-2 rounded-lg text-sm sm:text-base ${
-                    !hasMoreUssd
-                      ? "bg-gray-300 text-gray-500"
-                      : "bg-blue-600 text-white hover:bg-blue-700"
-                  }`}
-                >
-                  Next
-                </button>
-              </div>
-            </>
-          ) : (
-            <p className="text-gray-600 text-center text-lg">
-              No USSD transactions found.
-            </p>
-          )}
-        </div>
+      {tabValue === 2 && (
+        <UssdTransactionsTab
+          ussdTransactions={ussdTransactions}
+          totalUssd={totalUssd}
+          ussdPage={ussdPage}
+          hasMoreUssd={hasMoreUssd}
+          loading={loading}
+          error={error}
+          onPrevPage={handlePrevPage}
+          onNextPage={handleNextPage}
+          onDownload={() => openConfirmDialog(handleDownloadUssd)}
+        />
       )}
     </div>
   );
