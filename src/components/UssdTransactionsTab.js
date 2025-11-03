@@ -1,5 +1,4 @@
-// components/UssdTransactionsTab.jsx
-import React, { useMemo } from "react";
+import React from "react";
 
 const formatPhoneNumber = (number) => {
   if (!number) return "N/A";
@@ -13,11 +12,11 @@ const extractGB = (desc) => {
   return m ? m[1] : "N/A";
 };
 
-const getKey = (tx) => tx.externalRef || tx.id; // stable key
+const getKey = (tx) => tx.externalRef || tx.id;
 
 const UssdTransactionsTab = ({
-  ussdTransactions,
-  totalUssd,
+  ussdTransactions, // ← already unique
+  totalUssd, // ← total unique today
   ussdPage,
   hasMoreUssd,
   loading,
@@ -26,63 +25,58 @@ const UssdTransactionsTab = ({
   onNextPage,
   onDownload,
 }) => {
-  const uniqueTx = useMemo(() => {
-    const seen = new Set();
-    return ussdTransactions.filter((tx) => {
-      const k = getKey(tx);
-      if (seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    });
-  }, [ussdTransactions]);
-
   return (
     <div className="mt-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-3">
         <h2 className="text-xl sm:text-2xl font-bold text-gray-800">
           Today's USSD Transactions
         </h2>
-        {uniqueTx.length > 0 && (
+        {ussdTransactions.length > 0 && (
           <button
             onClick={onDownload}
-            className="mt-2 sm:mt-0 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm sm:text-base shadow-md"
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm sm:text-base shadow-md transition"
           >
             Download USSD (Excel)
           </button>
         )}
       </div>
 
+      {/* Stats */}
       <p className="text-sm text-gray-600 mb-4">
-        Total Raw Records: {totalUssd} | Unique on Page: {uniqueTx.length} (Page{" "}
-        {ussdPage})
+        <strong>{totalUssd}</strong> unique transaction
+        {totalUssd !== 1 ? "s" : ""} today | Showing{" "}
+        <strong>{ussdTransactions.length}</strong> on page {ussdPage}
       </p>
 
+      {/* Loading */}
       {loading && (
-        <div className="flex justify-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-600"></div>
+        <div className="flex justify-center py-8">
+          <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-blue-600"></div>
         </div>
       )}
 
-      {error && <p className="text-center text-red-500">{error}</p>}
+      {/* Error */}
+      {error && <p className="text-center text-red-600 font-medium">{error}</p>}
 
-      {!loading && !error && uniqueTx.length > 0 ? (
+      {/* Transactions Grid */}
+      {!loading && !error && ussdTransactions.length > 0 ? (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {uniqueTx.map((tx) => (
+            {ussdTransactions.map((tx) => (
               <div
                 key={getKey(tx)}
-                className="p-4 bg-white rounded-lg shadow-md hover:shadow-lg"
+                className="p-4 bg-white rounded-lg shadow hover:shadow-lg transition-shadow border border-gray-100"
               >
-                <p>
-                  <span className="font-semibold">Number:</span>{" "}
+                <p className="font-medium text-gray-900">
                   {formatPhoneNumber(tx.phoneNumber)}
                 </p>
-                <p>
+                <p className="text-sm text-gray-600 mt-1">
                   <span className="font-semibold">GB:</span>{" "}
                   {extractGB(tx.serviceName) || "N/A"}
                 </p>
                 {tx.externalRef && (
-                  <p className="text-xs text-gray-500 mt-1">
+                  <p className="text-xs text-gray-500 mt-2 truncate">
                     Ref: {tx.externalRef}
                   </p>
                 )}
@@ -90,27 +84,28 @@ const UssdTransactionsTab = ({
             ))}
           </div>
 
-          <div className="flex justify-between items-center mt-6">
+          {/* Pagination */}
+          <div className="flex justify-between items-center mt-8">
             <button
               onClick={onPrevPage}
               disabled={ussdPage === 1}
-              className={`px-4 py-2 rounded-lg text-sm sm:text-base ${
+              className={`px-5 py-2 rounded-lg font-medium transition ${
                 ussdPage === 1
-                  ? "bg-gray-300 text-gray-500"
+                  ? "bg-gray-200 text-gray-500 cursor-not-allowed"
                   : "bg-blue-600 text-white hover:bg-blue-700"
               }`}
             >
               Previous
             </button>
-            <span className="text-sm sm:text-base text-gray-600">
-              Page {ussdPage}
-            </span>
+
+            <span className="text-gray-700 font-medium">Page {ussdPage}</span>
+
             <button
               onClick={onNextPage}
               disabled={!hasMoreUssd}
-              className={`px-4 py-2 rounded-lg text-sm sm:text-base ${
+              className={`px-5 py-2 rounded-lg font-medium transition ${
                 !hasMoreUssd
-                  ? "bg-gray-300 text-gray-500"
+                  ? "bg-gray-200 text-gray-500 cursor-not-allowed"
                   : "bg-blue-600 text-white hover:bg-blue-700"
               }`}
             >
@@ -120,9 +115,11 @@ const UssdTransactionsTab = ({
         </>
       ) : (
         !loading && (
-          <p className="text-gray-600 text-center text-lg">
-            No USSD transactions found.
-          </p>
+          <div className="text-center py-12">
+            <p className="text-lg text-gray-600">
+              No USSD transactions found for today.
+            </p>
+          </div>
         )
       )}
     </div>

@@ -5,7 +5,7 @@ import {
   query,
   where,
   getDocs,
-  writeBatch, // <-- needed for batch updates
+  writeBatch,
 } from "firebase/firestore";
 import { db } from "./firebase";
 import * as XLSX from "xlsx";
@@ -15,7 +15,7 @@ import WebsiteTransactionsTab from "./components/WebsiteTransactionsTab";
 import UssdTransactionsTab from "./components/UssdTransactionsTab";
 
 /* ------------------------------------------------------------------ */
-/*  Helpers (used only inside this file)                              */
+/*  Helpers                                                           */
 /* ------------------------------------------------------------------ */
 const formatPhoneNumber = (number) => {
   if (!number) return "N/A";
@@ -123,15 +123,25 @@ const Dashboard = () => {
 
   const fetchTotalUssd = async () => {
     try {
-      const q = query(
-        collection(db, "data_purchase"),
-        where("status", "==", "approved"),
-        where("exported", "==", false)
-      );
+      const q = query(collection(db, "data_purchase"));
       const snap = await getDocs(q);
-      const count = snap.docs.filter(
-        (d) => d.data().error === undefined
-      ).length;
+
+      const groups = {};
+      snap.docs.forEach((d) => {
+        const data = d.data();
+        const key = data.externalRef || d.id;
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(data);
+      });
+
+      let count = 0;
+      for (const key in groups) {
+        const docs = groups[key];
+        const hasExported = docs.some((d) => d.exported === true);
+        const hasApproved = docs.some((d) => d.status === "approved");
+        if (!hasExported && hasApproved) count++;
+      }
+
       setTotalUssd(count);
     } catch (e) {
       setError("Failed to fetch total USSD: " + e.message);
@@ -179,26 +189,33 @@ const Dashboard = () => {
   const fetchUssdTransactions = async () => {
     setLoading(true);
     try {
-      const q = query(
-        collection(db, "data_purchase"),
-        where("status", "==", "approved"),
-        where("exported", "==", false)
-      );
+      const q = query(collection(db, "data_purchase"));
       const snap = await getDocs(q);
-      const raw = snap.docs
-        .map((d) => ({ id: d.id, ref: d.ref, ...d.data() }))
-        .filter((doc) => doc.error === undefined);
 
-      const seen = new Set();
-      const data = raw.filter((r) => {
-        const key = r.externalRef || r.id;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
+      const groups = {};
+      snap.docs.forEach((d) => {
+        const data = d.data();
+        const key = data.externalRef || d.id;
+        if (!groups[key]) groups[key] = [];
+        groups[key].push({ id: d.id, ref: d.ref, ...data });
       });
 
-      setUssdTransactions(data);
-      setHasMoreUssd(data.length === pageSize);
+      const result = [];
+      for (const key in groups) {
+        const docs = groups[key];
+        const hasExported = docs.some((d) => d.exported === true);
+        const hasApproved = docs.some((d) => d.status === "approved");
+        if (hasExported || !hasApproved) continue;
+
+        const doc = docs.find((d) => d.exported === false) || docs[0];
+        result.push(doc);
+      }
+
+      const startIdx = (ussdPage - 1) * pageSize;
+      const pageData = result.slice(startIdx, startIdx + pageSize);
+
+      setUssdTransactions(pageData);
+      setHasMoreUssd(startIdx + pageSize < result.length);
     } catch (e) {
       setError("Failed to fetch USSD: " + e.message);
     } finally {
@@ -224,7 +241,6 @@ const Dashboard = () => {
 
       setRecordCount(docs.length);
 
-      // ---- BATCH UPDATE (writeBatch) ----
       for (let i = 0; i < docs.length; i += batchSize) {
         const batch = writeBatch(db);
         docs
@@ -282,45 +298,51 @@ const Dashboard = () => {
   const handleDownloadUssd = async () => {
     try {
       setLoading(true);
-      const q = query(
-        collection(db, "data_purchase"),
-        where("status", "==", "approved"),
-        where("exported", "==", false)
-      );
+      const q = query(collection(db, "data_purchase"));
       const snap = await getDocs(q);
-      let docs = snap.docs
-        .map((d) => ({ id: d.id, ref: d.ref, data: d.data() }))
-        .filter((d) => d.data.error === undefined)
-        .slice(0, maxExportRecords);
 
-      // Group by unique key
-      const keyToDocs = {};
-      docs.forEach((d) => {
-        const key = d.data.externalRef || d.id;
-        if (!keyToDocs[key]) keyToDocs[key] = [];
-        keyToDocs[key].push(d);
+      const groups = {};
+      const docsToMark = new Set();
+
+      snap.docs.forEach((d) => {
+        const data = d.data();
+        const key = data.externalRef || d.id;
+        if (!groups[key]) groups[key] = [];
+        groups[key].push({ id: d.id, ref: d.ref, data });
+        docsToMark.add(d.ref);
       });
 
-      const exportRows = Object.keys(keyToDocs).map((key) => {
-        const first = keyToDocs[key][0].data;
-        return {
-          Number: formatPhoneNumber(first.phoneNumber),
-          GB: extractGB(first.serviceName) || "N/A",
-        };
-      });
+      const exportRows = [];
+      for (const key in groups) {
+        const docs = groups[key];
+        const hasExported = docs.some((d) => d.data.exported === true);
+        const hasApproved = docs.some((d) => d.data.status === "approved");
+        if (hasExported || !hasApproved) continue;
 
-      setRecordCount(exportRows.length);
+        // Pick the first non-exported doc (or any if all exported)
+        const picked = docs.find((d) => d.data.exported === false) || docs[0];
+        const rowData = picked.data; // <-- THIS IS THE FIX
 
-      // ---- MARK ALL DUPLICATES AS EXPORTED ----
-      for (let i = 0; i < docs.length; i += batchSize) {
+        exportRows.push({
+          Number: formatPhoneNumber(rowData.phoneNumber),
+          GB: extractGB(rowData.serviceName) || "N/A",
+        });
+      }
+
+      const finalRows = exportRows.slice(0, maxExportRecords);
+      setRecordCount(finalRows.length);
+
+      // Mark every doc in every group as exported
+      const refsToMark = Array.from(docsToMark);
+      for (let i = 0; i < refsToMark.length; i += batchSize) {
         const batch = writeBatch(db);
-        docs
+        refsToMark
           .slice(i, i + batchSize)
-          .forEach((d) => batch.update(d.ref, { exported: true }));
+          .forEach((ref) => batch.update(ref, { exported: true }));
         await batch.commit();
       }
 
-      downloadExcel(exportRows, "UssdTransactions", ["Number", "GB"]);
+      downloadExcel(finalRows, "UssdTransactions", ["Number", "GB"]);
       await fetchUssdTransactions();
       await fetchTotalUssd();
     } catch (e) {
@@ -351,22 +373,23 @@ const Dashboard = () => {
         const snap = await getDocs(q);
         count = snap.size;
       } else if (tabValue === 2) {
-        const q = query(
-          collection(db, "data_purchase"),
-          where("status", "==", "approved"),
-          where("exported", "==", false)
-        );
+        const q = query(collection(db, "data_purchase"));
         const snap = await getDocs(q);
-        const raw = snap.docs.map((d) => d.data());
-        const seen = new Set();
-        count = raw
-          .filter((r) => r.error === undefined)
-          .filter((r) => {
-            const k = r.externalRef || r.id;
-            if (seen.has(k)) return false;
-            seen.add(k);
-            return true;
-          }).length;
+
+        const groups = {};
+        snap.docs.forEach((d) => {
+          const data = d.data();
+          const key = data.externalRef || d.id;
+          if (!groups[key]) groups[key] = [];
+          groups[key].push(data);
+        });
+
+        for (const key in groups) {
+          const docs = groups[key];
+          const hasExported = docs.some((d) => d.exported === true);
+          const hasApproved = docs.some((d) => d.status === "approved");
+          if (!hasExported && hasApproved) count++;
+        }
       }
       setRecordCount(count);
       setConfirmAction(() => action);
