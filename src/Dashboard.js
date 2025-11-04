@@ -123,26 +123,12 @@ const Dashboard = () => {
 
   const fetchTotalUssd = async () => {
     try {
-      const q = query(collection(db, "data_purchase"));
+      const q = query(
+        collection(db, "delivery_queue"),
+        where("exported", "==", false)
+      );
       const snap = await getDocs(q);
-
-      const groups = {};
-      snap.docs.forEach((d) => {
-        const data = d.data();
-        const key = data.externalRef || d.id;
-        if (!groups[key]) groups[key] = [];
-        groups[key].push(data);
-      });
-
-      let count = 0;
-      for (const key in groups) {
-        const docs = groups[key];
-        const hasExported = docs.some((d) => d.exported === true);
-        const hasApproved = docs.some((d) => d.status === "approved");
-        if (!hasExported && hasApproved) count++;
-      }
-
-      setTotalUssd(count);
+      setTotalUssd(snap.size);
     } catch (e) {
       setError("Failed to fetch total USSD: " + e.message);
     }
@@ -189,33 +175,30 @@ const Dashboard = () => {
   const fetchUssdTransactions = async () => {
     setLoading(true);
     try {
-      const q = query(collection(db, "data_purchase"));
+      const q = query(
+        collection(db, "delivery_queue"),
+        where("exported", "==", false)
+      );
       const snap = await getDocs(q);
 
-      const groups = {};
-      snap.docs.forEach((d) => {
-        const data = d.data();
-        const key = data.externalRef || d.id;
-        if (!groups[key]) groups[key] = [];
-        groups[key].push({ id: d.id, ref: d.ref, ...data });
+      const result = snap.docs.map((d) => {
+        const row = d.data();
+        return {
+          id: d.id,
+          msisdn: row.msisdn,
+          gig: row.gig || "N/A",
+          amount: row.amount || "N/A",
+          externalRef: row.externalRef || "N/A",
+          createdAt: row.createdAt,
+        };
       });
 
-      const result = [];
-      for (const key in groups) {
-        const docs = groups[key];
-        const hasExported = docs.some((d) => d.exported === true);
-        const hasApproved = docs.some((d) => d.status === "approved");
-        if (hasExported || !hasApproved) continue;
-
-        const doc = docs.find((d) => d.exported === false) || docs[0];
-        result.push(doc);
-      }
-
       const startIdx = (ussdPage - 1) * pageSize;
-      const pageData = result.slice(startIdx, startIdx + pageSize);
+      const endIdx = startIdx + pageSize;
+      const pageData = result.slice(startIdx, endIdx);
 
       setUssdTransactions(pageData);
-      setHasMoreUssd(startIdx + pageSize < result.length);
+      setHasMoreUssd(endIdx < result.length);
     } catch (e) {
       setError("Failed to fetch USSD: " + e.message);
     } finally {
@@ -298,51 +281,34 @@ const Dashboard = () => {
   const handleDownloadUssd = async () => {
     try {
       setLoading(true);
-      const q = query(collection(db, "data_purchase"));
+      const q = query(
+        collection(db, "delivery_queue"),
+        where("exported", "==", false)
+      );
       const snap = await getDocs(q);
+      const docs = snap.docs.slice(0, maxExportRecords);
 
-      const groups = {};
-      const docsToMark = new Set();
-
-      snap.docs.forEach((d) => {
-        const data = d.data();
-        const key = data.externalRef || d.id;
-        if (!groups[key]) groups[key] = [];
-        groups[key].push({ id: d.id, ref: d.ref, data });
-        docsToMark.add(d.ref);
+      const data = docs.map((d) => {
+        const row = d.data();
+        return {
+          Number: formatPhoneNumber(row.msisdn),
+          GB: row.gig || "N/A",
+          Amount: row.amount || "N/A",
+        };
       });
 
-      const exportRows = [];
-      for (const key in groups) {
-        const docs = groups[key];
-        const hasExported = docs.some((d) => d.data.exported === true);
-        const hasApproved = docs.some((d) => d.data.status === "approved");
-        if (hasExported || !hasApproved) continue;
+      setRecordCount(docs.length);
 
-        // Pick the first non-exported doc (or any if all exported)
-        const picked = docs.find((d) => d.data.exported === false) || docs[0];
-        const rowData = picked.data; // <-- THIS IS THE FIX
-
-        exportRows.push({
-          Number: formatPhoneNumber(rowData.phoneNumber),
-          GB: extractGB(rowData.serviceName) || "N/A",
-        });
-      }
-
-      const finalRows = exportRows.slice(0, maxExportRecords);
-      setRecordCount(finalRows.length);
-
-      // Mark every doc in every group as exported
-      const refsToMark = Array.from(docsToMark);
-      for (let i = 0; i < refsToMark.length; i += batchSize) {
+      // BATCH UPDATE: mark as exported
+      for (let i = 0; i < docs.length; i += batchSize) {
         const batch = writeBatch(db);
-        refsToMark
+        docs
           .slice(i, i + batchSize)
-          .forEach((ref) => batch.update(ref, { exported: true }));
+          .forEach((d) => batch.update(d.ref, { exported: true }));
         await batch.commit();
       }
 
-      downloadExcel(finalRows, "UssdTransactions", ["Number", "GB"]);
+      downloadExcel(data, "UssdTransactions", ["Number", "GB", "Amount"]);
       await fetchUssdTransactions();
       await fetchTotalUssd();
     } catch (e) {
@@ -373,23 +339,12 @@ const Dashboard = () => {
         const snap = await getDocs(q);
         count = snap.size;
       } else if (tabValue === 2) {
-        const q = query(collection(db, "data_purchase"));
+        const q = query(
+          collection(db, "delivery_queue"),
+          where("exported", "==", false)
+        );
         const snap = await getDocs(q);
-
-        const groups = {};
-        snap.docs.forEach((d) => {
-          const data = d.data();
-          const key = data.externalRef || d.id;
-          if (!groups[key]) groups[key] = [];
-          groups[key].push(data);
-        });
-
-        for (const key in groups) {
-          const docs = groups[key];
-          const hasExported = docs.some((d) => d.exported === true);
-          const hasApproved = docs.some((d) => d.status === "approved");
-          if (!hasExported && hasApproved) count++;
-        }
+        count = snap.size;
       }
       setRecordCount(count);
       setConfirmAction(() => action);
@@ -470,7 +425,7 @@ const Dashboard = () => {
                 ? "numbers"
                 : tabValue === 1
                 ? "transactions"
-                : "unique USSD transactions"}
+                : "USSD transactions"}
               ?
               {recordCount >= maxExportRecords &&
                 ` Only first ${maxExportRecords} will be processed.`}

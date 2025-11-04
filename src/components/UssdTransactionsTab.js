@@ -6,17 +6,11 @@ const formatPhoneNumber = (number) => {
   return cleaned.length === 9 ? `0${cleaned}` : cleaned || "N/A";
 };
 
-const extractGB = (desc) => {
-  if (!desc) return "N/A";
-  const m = desc.match(/(\d+)GB/i);
-  return m ? m[1] : "N/A";
-};
-
 const getKey = (tx) => tx.externalRef || tx.id;
 
 const UssdTransactionsTab = ({
-  ussdTransactions, // ← already unique
-  totalUssd, // ← total unique today
+  ussdTransactions, // ← from delivery_queue
+  totalUssd,
   ussdPage,
   hasMoreUssd,
   loading,
@@ -30,7 +24,7 @@ const UssdTransactionsTab = ({
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-3">
         <h2 className="text-xl sm:text-2xl font-bold text-gray-800">
-          Today's USSD Transactions
+          USSD Transactions (Ready for Export)
         </h2>
         {ussdTransactions.length > 0 && (
           <button
@@ -44,8 +38,8 @@ const UssdTransactionsTab = ({
 
       {/* Stats */}
       <p className="text-sm text-gray-600 mb-4">
-        <strong>{totalUssd}</strong> unique transaction
-        {totalUssd !== 1 ? "s" : ""} today | Showing{" "}
+        <strong>{totalUssd}</strong> transaction
+        {totalUssd !== 1 ? "s" : ""} pending export | Showing{" "}
         <strong>{ussdTransactions.length}</strong> on page {ussdPage}
       </p>
 
@@ -69,11 +63,14 @@ const UssdTransactionsTab = ({
                 className="p-4 bg-white rounded-lg shadow hover:shadow-lg transition-shadow border border-gray-100"
               >
                 <p className="font-medium text-gray-900">
-                  {formatPhoneNumber(tx.phoneNumber)}
+                  {formatPhoneNumber(tx.msisdn)}
                 </p>
                 <p className="text-sm text-gray-600 mt-1">
-                  <span className="font-semibold">GB:</span>{" "}
-                  {extractGB(tx.serviceName) || "N/A"}
+                  <span className="font-semibold">GB:</span> {tx.gig || "N/A"}
+                </p>
+                <p className="text-sm text-gray-600 mt-1">
+                  <span className="font-semibold">Amount:</span> GH₵
+                  {tx.amount || "N/A"}
                 </p>
                 {tx.externalRef && (
                   <p className="text-xs text-gray-500 mt-2 truncate">
@@ -117,7 +114,7 @@ const UssdTransactionsTab = ({
         !loading && (
           <div className="text-center py-12">
             <p className="text-lg text-gray-600">
-              No USSD transactions found for today.
+              No pending USSD transactions for export.
             </p>
           </div>
         )
