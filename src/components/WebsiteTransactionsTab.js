@@ -63,7 +63,7 @@ const WebsiteTransactionsTab = ({
               >
                 <p>
                   <span className="font-semibold">Number:</span>{" "}
-                  {formatPhoneNumber(tx.phoneNumber)}
+                  {formatPhoneNumber(tx.recipientNumber)}
                 </p>
                 <p>
                   <span className="font-semibold">GB:</span>{" "}

@@ -254,7 +254,7 @@ const Dashboard = () => {
       const docs = snap.docs.slice(0, maxExportRecords);
 
       const data = docs.map((d) => ({
-        Number: formatPhoneNumber(d.data().phoneNumber),
+        Number: formatPhoneNumber(d.data().recipientNumber),
         GB: extractGB(d.data().serviceName) || "N/A",
       }));
 
