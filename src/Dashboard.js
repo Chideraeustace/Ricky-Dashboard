@@ -1,5 +1,5 @@
 /* eslint-disable no-unused-vars */
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect } from "react";
 import {
   collection,
   query,
@@ -9,8 +9,9 @@ import {
 } from "firebase/firestore";
 import { db } from "./firebase";
 import * as XLSX from "xlsx";
+import DatePicker from "react-datepicker";
+import "react-datepicker/dist/react-datepicker.css";
 
-import NumbersTab from "./components/NumbersTab";
 import WebsiteTransactionsTab from "./components/WebsiteTransactionsTab";
 import UssdTransactionsTab from "./components/UssdTransactionsTab";
 
@@ -36,38 +37,34 @@ const downloadExcel = (data, fileName, headers) => {
   XLSX.writeFile(wb, `${fileName}.xlsx`);
 };
 
-const debounce = (func, wait) => {
-  let timeout;
-  return (...args) => {
-    clearTimeout(timeout);
-    timeout = setTimeout(() => func(...args), wait);
-  };
-};
-
 /* ------------------------------------------------------------------ */
 /*  Dashboard component                                               */
 /* ------------------------------------------------------------------ */
 const Dashboard = () => {
-  /* -------------------------- State -------------------------- */
   const [tabValue, setTabValue] = useState(0);
 
-  const [numbers, setNumbers] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [ussdTransactions, setUssdTransactions] = useState([]);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  const [numbersPage, setNumbersPage] = useState(1);
   const [transactionsPage, setTransactionsPage] = useState(1);
   const [ussdPage, setUssdPage] = useState(1);
-  const [hasMoreNumbers, setHasMoreNumbers] = useState(true);
   const [hasMoreTransactions, setHasMoreTransactions] = useState(true);
   const [hasMoreUssd, setHasMoreUssd] = useState(true);
 
-  const [totalNumbers, setTotalNumbers] = useState(0);
-  const [totalTransactions, setTotalTransactions] = useState(0);
-  const [totalUssd, setTotalUssd] = useState(0);
+  // Revenue states
+  const [todayRevenue, setTodayRevenue] = useState(0);
+  const [todayCount, setTodayCount] = useState(0);
+  const [yesterdayRevenue, setYesterdayRevenue] = useState(0);
+  const [yesterdayCount, setYesterdayCount] = useState(0);
+  const [last7DaysRevenue, setLast7DaysRevenue] = useState(0);
+  const [last7DaysCount, setLast7DaysCount] = useState(0);
+  const [customStartDate, setCustomStartDate] = useState(null);
+  const [customEndDate, setCustomEndDate] = useState(null);
+  const [customRevenue, setCustomRevenue] = useState(0);
+  const [customCount, setCustomCount] = useState(0);
 
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [confirmAction, setConfirmAction] = useState(null);
@@ -77,89 +74,102 @@ const Dashboard = () => {
   const maxExportRecords = 1000;
   const batchSize = 500;
 
+  // Date helpers
+  const now = new Date();
+  const todayStart = new Date(now.setHours(0, 0, 0, 0));
+  const todayEnd = new Date(todayStart);
+  todayEnd.setDate(todayEnd.getDate() + 1);
+
+  const yesterdayStart = new Date(todayStart);
+  yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+  const yesterdayEnd = new Date(yesterdayStart);
+  yesterdayEnd.setDate(yesterdayEnd.getDate() + 1);
+
+  const last7Start = new Date(todayStart);
+  last7Start.setDate(last7Start.getDate() - 7);
+
   /* ----------------------- Tab handling ---------------------- */
   const handleTabChange = (newValue) => {
     setTabValue(newValue);
     setError(null);
-    if (newValue === 0) {
-      setNumbersPage(1);
-      setHasMoreNumbers(true);
-    } else if (newValue === 1) {
-      setTransactionsPage(1);
-      setHasMoreTransactions(true);
-    } else if (newValue === 2) {
-      setUssdPage(1);
-      setHasMoreUssd(true);
-    }
   };
 
-  /* -------------------------- Totals -------------------------- */
-  const fetchTotalNumbers = async () => {
-    try {
-      const q = query(
-        collection(db, "entries"),
-        where("exported", "==", false)
-      );
-      const snap = await getDocs(q);
-      setTotalNumbers(snap.size);
-    } catch (e) {
-      setError("Failed to fetch total numbers: " + e.message);
-    }
-  };
-
-  const fetchTotalTransactions = async () => {
-    try {
-      const q = query(
-        collection(db, "webite_purchase"),
-        where("status", "==", "approved"),
-        where("exported", "==", false)
-      );
-      const snap = await getDocs(q);
-      setTotalTransactions(snap.size);
-    } catch (e) {
-      setError("Failed to fetch total transactions: " + e.message);
-    }
-  };
-
-  const fetchTotalUssd = async () => {
-    try {
-      const q = query(
-        collection(db, "delivery_queue"),
-        where("exported", "==", false)
-      );
-      const snap = await getDocs(q);
-      setTotalUssd(snap.size);
-    } catch (e) {
-      setError("Failed to fetch total USSD: " + e.message);
-    }
-  };
-
-  /* -------------------------- Fetchers -------------------------- */
-  const fetchNumbers = async () => {
+  /* -------------------------- Revenue Fetch ------------------- */
+  const fetchRevenueStats = async () => {
     setLoading(true);
     try {
-      const q = query(
-        collection(db, "entries"),
-        where("exported", "==", false)
+      // Today
+      const todayQuery = query(
+        collection(db, "rickyRevenue"),
+        where("createdAt", ">=", todayStart),
+        where("createdAt", "<", todayEnd),
       );
-      const snap = await getDocs(q);
-      const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      setNumbers(data);
-      setHasMoreNumbers(data.length === pageSize);
+      const todaySnap = await getDocs(todayQuery);
+      let todayTotal = 0;
+      todaySnap.forEach((doc) => {
+        todayTotal += Number(doc.data().amount || 0);
+      });
+      setTodayRevenue(todayTotal);
+      setTodayCount(todaySnap.size);
+
+      // Yesterday
+      const yesterdayQuery = query(
+        collection(db, "rickyRevenue"),
+        where("createdAt", ">=", yesterdayStart),
+        where("createdAt", "<", yesterdayEnd),
+      );
+      const yesterdaySnap = await getDocs(yesterdayQuery);
+      let yesterdayTotal = 0;
+      yesterdaySnap.forEach((doc) => {
+        yesterdayTotal += Number(doc.data().amount || 0);
+      });
+      setYesterdayRevenue(yesterdayTotal);
+      setYesterdayCount(yesterdaySnap.size);
+
+      // Last 7 days
+      const last7Query = query(
+        collection(db, "rickyRevenue"),
+        where("createdAt", ">=", last7Start),
+        where("createdAt", "<", todayEnd),
+      );
+      const last7Snap = await getDocs(last7Query);
+      let last7Total = 0;
+      last7Snap.forEach((doc) => {
+        last7Total += Number(doc.data().amount || 0);
+      });
+      setLast7DaysRevenue(last7Total);
+      setLast7DaysCount(last7Snap.size);
+
+      // Custom range
+      if (customStartDate && customEndDate) {
+        const customQuery = query(
+          collection(db, "rickyRevenue"),
+          where("createdAt", ">=", customStartDate),
+          where("createdAt", "<=", customEndDate),
+        );
+        const customSnap = await getDocs(customQuery);
+        let customTotal = 0;
+        customSnap.forEach((doc) => {
+          customTotal += Number(doc.data().amount || 0);
+        });
+        setCustomRevenue(customTotal);
+        setCustomCount(customSnap.size);
+      }
     } catch (e) {
-      setError("Failed to fetch numbers: " + e.message);
+      setError("Failed to load revenue data: " + e.message);
     } finally {
       setLoading(false);
     }
   };
 
+  /* -------------------------- Fetchers (Website & USSD) ------ */
   const fetchTransactions = async () => {
     setLoading(true);
     try {
       const q = query(
         collection(db, "webite_purchase"),
         where("status", "==", "approved"),
-        where("exported", "==", false)
+        where("exported", "==", false),
       );
       const snap = await getDocs(q);
       const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
@@ -177,7 +187,7 @@ const Dashboard = () => {
     try {
       const q = query(
         collection(db, "delivery_queue"),
-        where("exported", "==", false)
+        where("exported", "==", false),
       );
       const snap = await getDocs(q);
 
@@ -185,10 +195,17 @@ const Dashboard = () => {
         const row = d.data();
         return {
           id: d.id,
-          msisdn: row.msisdn,
-          gig: row.gig || "N/A",
+          beneficiary_msisdn:
+            row.beneficiary_msisdn ||
+            row.subscriber_number ||
+            row.ussd_msisdn ||
+            null,
+          ussd_msisdn: row.ussd_msisdn || null,
+          gig:
+            row.gig || extractGBFromService(row.serviceName, row.desc) || "N/A",
           amount: row.amount || "N/A",
-          externalRef: row.externalRef || "N/A",
+          transaction_id: row.transaction_id || "—",
+          serviceName: row.serviceName || "—",
           createdAt: row.createdAt,
         };
       });
@@ -200,160 +217,157 @@ const Dashboard = () => {
       setUssdTransactions(pageData);
       setHasMoreUssd(endIdx < result.length);
     } catch (e) {
-      setError("Failed to fetch USSD: " + e.message);
+      setError("Failed to fetch USSD transactions: " + e.message);
     } finally {
       setLoading(false);
     }
   };
 
-  /* -------------------------- Export Handlers -------------------------- */
-  const handleDownloadNumbers = async () => {
-    try {
-      setLoading(true);
-      const q = query(
-        collection(db, "entries"),
-        where("exported", "==", false)
-      );
-      const snap = await getDocs(q);
-      const docs = snap.docs.slice(0, maxExportRecords);
-
-      const data = docs.map((d) => ({
-        "Phone Number": formatPhoneNumber(d.data().phoneNumber),
-        "Network Provider": d.data().networkProvider || "N/A",
-      }));
-
-      setRecordCount(docs.length);
-
-      for (let i = 0; i < docs.length; i += batchSize) {
-        const batch = writeBatch(db);
-        docs
-          .slice(i, i + batchSize)
-          .forEach((d) => batch.update(d.ref, { exported: true }));
-        await batch.commit();
-      }
-
-      downloadExcel(data, "Numbers", ["Phone Number", "Network Provider"]);
-      await fetchNumbers();
-      await fetchTotalNumbers();
-    } catch (e) {
-      setError("Export failed: " + e.message);
-    } finally {
-      setLoading(false);
+  const extractGBFromService = (serviceName, desc) => {
+    if (serviceName) {
+      const match = serviceName.match(/(\d+(?:\.\d+)?)GB/i);
+      if (match) return match[1] + "GB";
     }
+    if (desc) {
+      const match = desc.match(/(\d+(?:\.\d+)?)GB/i);
+      if (match) return match[1] + "GB";
+    }
+    return null;
   };
 
-  const handleDownloadTransactions = async () => {
-    try {
-      setLoading(true);
-      const q = query(
-        collection(db, "webite_purchase"),
-        where("status", "==", "approved"),
-        where("exported", "==", false)
-      );
-      const snap = await getDocs(q);
-      const docs = snap.docs.slice(0, maxExportRecords);
-
-      const data = docs.map((d) => ({
-        Number: formatPhoneNumber(d.data().recipientNumber),
-        GB: extractGB(d.data().serviceName) || "N/A",
-      }));
-
-      setRecordCount(docs.length);
-
-      for (let i = 0; i < docs.length; i += batchSize) {
-        const batch = writeBatch(db);
-        docs
-          .slice(i, i + batchSize)
-          .forEach((d) => batch.update(d.ref, { exported: true }));
-        await batch.commit();
-      }
-
-      downloadExcel(data, "Transactions", ["Number", "GB"]);
-      await fetchTransactions();
-      await fetchTotalTransactions();
-    } catch (e) {
-      setError("Export failed: " + e.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleDownloadUssd = async () => {
-    try {
-      setLoading(true);
-      const q = query(
-        collection(db, "delivery_queue"),
-        where("exported", "==", false)
-      );
-      const snap = await getDocs(q);
-      const docs = snap.docs.slice(0, maxExportRecords);
-
-      const data = docs.map((d) => {
-        const row = d.data();
-        return {
-          Number: formatPhoneNumber(row.msisdn),
-          GB: row.gig || "N/A",
-          Amount: row.amount || "N/A",
-        };
-      });
-
-      setRecordCount(docs.length);
-
-      // BATCH UPDATE: mark as exported
-      for (let i = 0; i < docs.length; i += batchSize) {
-        const batch = writeBatch(db);
-        docs
-          .slice(i, i + batchSize)
-          .forEach((d) => batch.update(d.ref, { exported: true }));
-        await batch.commit();
-      }
-
-      downloadExcel(data, "UssdTransactions", ["Number", "GB", "Amount"]);
-      await fetchUssdTransactions();
-      await fetchTotalUssd();
-    } catch (e) {
-      setError("USSD export failed: " + e.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  /* -------------------------- Confirm Dialog -------------------------- */
-  const openConfirmDialog = async (action) => {
-    try {
-      setLoading(true);
-      let count = 0;
-      if (tabValue === 0) {
-        const q = query(
-          collection(db, "entries"),
-          where("exported", "==", false)
-        );
-        const snap = await getDocs(q);
-        count = snap.size;
-      } else if (tabValue === 1) {
+  /* -------------------------- Export Handlers ----------------- */
+  const handleDownloadTransactions = () => {
+    openConfirmDialog(async () => {
+      try {
+        setLoading(true);
         const q = query(
           collection(db, "webite_purchase"),
           where("status", "==", "approved"),
-          where("exported", "==", false)
+          where("exported", "==", false),
         );
         const snap = await getDocs(q);
-        count = snap.size;
-      } else if (tabValue === 2) {
+        const docs = snap.docs.slice(0, maxExportRecords);
+
+        const data = docs.map((d) => ({
+          Number: formatPhoneNumber(d.data().recipientNumber),
+          GB: extractGB(d.data().serviceName) || "N/A",
+        }));
+
+        setRecordCount(docs.length);
+
+        for (let i = 0; i < docs.length; i += batchSize) {
+          const batch = writeBatch(db);
+          docs
+            .slice(i, i + batchSize)
+            .forEach((d) => batch.update(d.ref, { exported: true }));
+          await batch.commit();
+        }
+
+        downloadExcel(data, "Transactions", ["Number", "GB"]);
+        await fetchTransactions();
+      } catch (e) {
+        setError("Export failed: " + e.message);
+      } finally {
+        setLoading(false);
+      }
+    });
+  };
+
+  const handleDownloadUssd = () => {
+    openConfirmDialog(async () => {
+      try {
+        setLoading(true);
         const q = query(
           collection(db, "delivery_queue"),
-          where("exported", "==", false)
+          where("exported", "==", false),
         );
         const snap = await getDocs(q);
-        count = snap.size;
+        const docs = snap.docs.slice(0, maxExportRecords);
+
+        const data = docs.map((d) => {
+          const row = d.data();
+          const amount =
+            typeof row.amount === "number" ? row.amount.toFixed(2) : "N/A";
+
+          let gb = row.gig || "N/A";
+          if (gb === "N/A") {
+            if (row.serviceName) {
+              const match = row.serviceName.match(/(\d+(?:\.\d+)?)GB/i);
+              if (match) gb = match[1] + "GB";
+            } else if (row.desc) {
+              const match = row.desc.match(/(\d+(?:\.\d+)?)GB/i);
+              if (match) gb = match[1] + "GB";
+            }
+          }
+
+          return {
+            Number: formatPhoneNumber(
+              row.beneficiary_msisdn || row.subscriber_number,
+            ),
+            GB: gb,
+            Amount: amount,
+            Ref: row.transaction_id || "—",
+            Network: row.r_switch || "—",
+            Service: row.serviceName || row.desc || "—",
+          };
+        });
+
+        setRecordCount(docs.length);
+
+        for (let i = 0; i < docs.length; i += batchSize) {
+          const batchDocs = docs.slice(i, i + batchSize);
+          const batch = writeBatch(db);
+          batchDocs.forEach((d) => batch.update(d.ref, { exported: true }));
+          await batch.commit();
+        }
+
+        downloadExcel(
+          data,
+          "UssdTransactions_" + new Date().toISOString().slice(0, 10),
+          ["Number", "GB", "Amount", "Ref", "Network", "Service"],
+        );
+
+        await fetchUssdTransactions();
+      } catch (e) {
+        setError("USSD export failed: " + e.message);
+      } finally {
+        setLoading(false);
       }
-      setRecordCount(count);
-      setConfirmAction(() => action);
-      setShowConfirmDialog(true);
-    } catch (e) {
-      setError("Failed to count records: " + e.message);
-    } finally {
-      setLoading(false);
-    }
+    });
+  };
+
+  /* -------------------------- Confirm Dialog ------------------ */
+  const openConfirmDialog = (action) => {
+    const run = async () => {
+      try {
+        setLoading(true);
+        let count = 0;
+        if (tabValue === 1) {
+          const q = query(
+            collection(db, "webite_purchase"),
+            where("status", "==", "approved"),
+            where("exported", "==", false),
+          );
+          const snap = await getDocs(q);
+          count = snap.size;
+        } else if (tabValue === 2) {
+          const q = query(
+            collection(db, "delivery_queue"),
+            where("exported", "==", false),
+          );
+          const snap = await getDocs(q);
+          count = snap.size;
+        }
+        setRecordCount(count);
+        setConfirmAction(() => action);
+        setShowConfirmDialog(true);
+      } catch (e) {
+        setError("Failed to count records: " + e.message);
+      } finally {
+        setLoading(false);
+      }
+    };
+    run();
   };
 
   const closeConfirmDialog = () => {
@@ -367,45 +381,38 @@ const Dashboard = () => {
     closeConfirmDialog();
   };
 
-  /* -------------------------- Pagination -------------------------- */
-  const handlePrevPage = useCallback(
-    debounce(() => {
-      if (tabValue === 0 && numbersPage > 1) setNumbersPage((p) => p - 1);
-      else if (tabValue === 1 && transactionsPage > 1)
-        setTransactionsPage((p) => p - 1);
-      else if (tabValue === 2 && ussdPage > 1) setUssdPage((p) => p - 1);
-    }, 300),
-    [tabValue, numbersPage, transactionsPage, ussdPage]
-  );
+  /* -------------------------- Pagination ---------------------- */
+  const handlePrevPage = () => {
+    if (tabValue === 1 && transactionsPage > 1) {
+      setTransactionsPage((p) => p - 1);
+    } else if (tabValue === 2 && ussdPage > 1) {
+      setUssdPage((p) => p - 1);
+    }
+  };
 
-  const handleNextPage = useCallback(
-    debounce(() => {
-      if (tabValue === 0 && hasMoreNumbers) setNumbersPage((p) => p + 1);
-      else if (tabValue === 1 && hasMoreTransactions)
-        setTransactionsPage((p) => p + 1);
-      else if (tabValue === 2 && hasMoreUssd) setUssdPage((p) => p + 1);
-    }, 300),
-    [tabValue, hasMoreNumbers, hasMoreTransactions, hasMoreUssd]
-  );
+  const handleNextPage = () => {
+    if (tabValue === 1 && hasMoreTransactions) {
+      setTransactionsPage((p) => p + 1);
+    } else if (tabValue === 2 && hasMoreUssd) {
+      setUssdPage((p) => p + 1);
+    }
+  };
 
   /* -------------------------- Effects -------------------------- */
   useEffect(() => {
     if (tabValue === 0) {
-      fetchNumbers();
-      fetchTotalNumbers();
+      fetchRevenueStats();
     } else if (tabValue === 1) {
       fetchTransactions();
-      fetchTotalTransactions();
     } else if (tabValue === 2) {
       fetchUssdTransactions();
-      fetchTotalUssd();
     }
-  }, [tabValue]);
+  }, [tabValue, customStartDate, customEndDate]);
 
   useEffect(() => {
     if (error) {
-      const t = setTimeout(() => setError(null), 5000);
-      return () => clearTimeout(t);
+      const timer = setTimeout(() => setError(null), 5000);
+      return () => clearTimeout(timer);
     }
   }, [error]);
 
@@ -421,12 +428,7 @@ const Dashboard = () => {
             </h3>
             <p className="text-gray-600 mb-6">
               Export <strong>{recordCount}</strong>{" "}
-              {tabValue === 0
-                ? "numbers"
-                : tabValue === 1
-                ? "transactions"
-                : "USSD transactions"}
-              ?
+              {tabValue === 1 ? "website transactions" : "USSD transactions"}?
               {recordCount >= maxExportRecords &&
                 ` Only first ${maxExportRecords} will be processed.`}
             </p>
@@ -450,7 +452,7 @@ const Dashboard = () => {
 
       {/* Tabs */}
       <div className="flex flex-wrap border-b border-gray-300 bg-white rounded-lg shadow-sm mb-6">
-        {["Numbers", "Website Transactions", "USSD Transactions"].map(
+        {["Revenue", "Website Transactions", "USSD Transactions"].map(
           (label, i) => (
             <button
               key={i}
@@ -463,50 +465,164 @@ const Dashboard = () => {
             >
               {label}
             </button>
-          )
+          ),
         )}
       </div>
 
-      {/* Tab Content */}
+      {/* Revenue Tab */}
       {tabValue === 0 && (
-        <NumbersTab
-          numbers={numbers}
-          totalNumbers={totalNumbers}
-          numbersPage={numbersPage}
-          hasMoreNumbers={hasMoreNumbers}
-          loading={loading}
-          error={error}
-          onPrevPage={handlePrevPage}
-          onNextPage={handleNextPage}
-          onDownload={() => openConfirmDialog(handleDownloadNumbers)}
-        />
+        <div className="mt-6">
+          <h2 className="text-2xl font-bold text-gray-800 mb-6">
+            Revenue Overview
+          </h2>
+
+          {loading && (
+            <div className="flex justify-center py-8">
+              <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-blue-600"></div>
+            </div>
+          )}
+
+          {error && (
+            <p className="text-center text-red-600 font-medium mb-6">{error}</p>
+          )}
+
+          {!loading && !error && (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                <div className="bg-white rounded-xl shadow-lg p-6">
+                  <h3 className="text-lg font-semibold text-gray-700 mb-2">
+                    Today
+                  </h3>
+                  <div className="text-3xl font-bold text-green-600">
+                    GH₵ {todayRevenue.toFixed(2)}
+                  </div>
+                  <p className="text-sm text-gray-600 mt-1">
+                    {todayCount} transaction{todayCount !== 1 ? "s" : ""}
+                  </p>
+                </div>
+
+                <div className="bg-white rounded-xl shadow-lg p-6">
+                  <h3 className="text-lg font-semibold text-gray-700 mb-2">
+                    Yesterday
+                  </h3>
+                  <div className="text-3xl font-bold text-green-600">
+                    GH₵ {yesterdayRevenue.toFixed(2)}
+                  </div>
+                  <p className="text-sm text-gray-600 mt-1">
+                    {yesterdayCount} transaction
+                    {yesterdayCount !== 1 ? "s" : ""}
+                  </p>
+                </div>
+
+                <div className="bg-white rounded-xl shadow-lg p-6">
+                  <h3 className="text-lg font-semibold text-gray-700 mb-2">
+                    Last 7 Days
+                  </h3>
+                  <div className="text-3xl font-bold text-green-600">
+                    GH₵ {last7DaysRevenue.toFixed(2)}
+                  </div>
+                  <p className="text-sm text-gray-600 mt-1">
+                    {last7DaysCount} transaction
+                    {last7DaysCount !== 1 ? "s" : ""}
+                  </p>
+                </div>
+              </div>
+
+              {/* Custom Date Range */}
+              <div className="bg-white rounded-xl shadow-lg p-6">
+                <h3 className="text-lg font-semibold text-gray-700 mb-4">
+                  Custom Date Range
+                </h3>
+                <div className="flex flex-col sm:flex-row gap-4 items-end mb-6">
+                  <div className="flex-1">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Start Date
+                    </label>
+                    <DatePicker
+                      selected={customStartDate}
+                      onChange={(date) => setCustomStartDate(date)}
+                      selectsStart
+                      startDate={customStartDate}
+                      endDate={customEndDate}
+                      maxDate={new Date()}
+                      dateFormat="yyyy-MM-dd"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholderText="Select start date"
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      End Date
+                    </label>
+                    <DatePicker
+                      selected={customEndDate}
+                      onChange={(date) => setCustomEndDate(date)}
+                      selectsEnd
+                      startDate={customStartDate}
+                      endDate={customEndDate}
+                      minDate={customStartDate}
+                      maxDate={new Date()}
+                      dateFormat="yyyy-MM-dd"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholderText="Select end date"
+                    />
+                  </div>
+                  <button
+                    onClick={fetchRevenueStats}
+                    disabled={!customStartDate || !customEndDate}
+                    className={`px-6 py-2 rounded-lg font-medium transition ${
+                      customStartDate && customEndDate
+                        ? "bg-blue-600 text-white hover:bg-blue-700"
+                        : "bg-gray-300 text-gray-500 cursor-not-allowed"
+                    }`}
+                  >
+                    Calculate
+                  </button>
+                </div>
+
+                {customStartDate && customEndDate && (
+                  <div className="mt-4 p-4 bg-gray-50 rounded-lg">
+                    <p className="text-base font-medium text-gray-800">
+                      From {customStartDate.toLocaleDateString("en-GB")} to{" "}
+                      {customEndDate.toLocaleDateString("en-GB")}:
+                    </p>
+                    <p className="text-2xl font-bold text-green-600 mt-2">
+                      GH₵ {customRevenue.toFixed(2)}
+                    </p>
+                    <p className="text-sm text-gray-600">
+                      {customCount} transaction{customCount !== 1 ? "s" : ""}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
       )}
 
       {tabValue === 1 && (
         <WebsiteTransactionsTab
           transactions={transactions}
-          totalTransactions={totalTransactions}
           transactionsPage={transactionsPage}
           hasMoreTransactions={hasMoreTransactions}
           loading={loading}
           error={error}
           onPrevPage={handlePrevPage}
           onNextPage={handleNextPage}
-          onDownload={() => openConfirmDialog(handleDownloadTransactions)}
+          onDownload={handleDownloadTransactions}
         />
       )}
 
       {tabValue === 2 && (
         <UssdTransactionsTab
           ussdTransactions={ussdTransactions}
-          totalUssd={totalUssd}
           ussdPage={ussdPage}
           hasMoreUssd={hasMoreUssd}
           loading={loading}
           error={error}
           onPrevPage={handlePrevPage}
           onNextPage={handleNextPage}
-          onDownload={() => openConfirmDialog(handleDownloadUssd)}
+          onDownload={handleDownloadUssd}
         />
       )}
     </div>

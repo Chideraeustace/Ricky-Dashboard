@@ -6,10 +6,11 @@ const formatPhoneNumber = (number) => {
   return cleaned.length === 9 ? `0${cleaned}` : cleaned || "N/A";
 };
 
-const getKey = (tx) => tx.externalRef || tx.id;
+const getKey = (tx) =>
+  tx.id || tx.transaction_id || Math.random().toString(36).substr(2, 9);
 
 const UssdTransactionsTab = ({
-  ussdTransactions, // ← from delivery_queue
+  ussdTransactions,
   totalUssd,
   ussdPage,
   hasMoreUssd,
@@ -38,22 +39,19 @@ const UssdTransactionsTab = ({
 
       {/* Stats */}
       <p className="text-sm text-gray-600 mb-4">
-        <strong>{totalUssd}</strong> transaction
-        {totalUssd !== 1 ? "s" : ""} pending export | Showing{" "}
-        <strong>{ussdTransactions.length}</strong> on page {ussdPage}
+        <strong>{totalUssd}</strong> transaction{totalUssd !== 1 ? "s" : ""}{" "}
+        pending export | Showing <strong>{ussdTransactions.length}</strong> on
+        page {ussdPage}
       </p>
 
-      {/* Loading */}
       {loading && (
         <div className="flex justify-center py-8">
           <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-blue-600"></div>
         </div>
       )}
 
-      {/* Error */}
       {error && <p className="text-center text-red-600 font-medium">{error}</p>}
 
-      {/* Transactions Grid */}
       {!loading && !error && ussdTransactions.length > 0 ? (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -63,20 +61,30 @@ const UssdTransactionsTab = ({
                 className="p-4 bg-white rounded-lg shadow hover:shadow-lg transition-shadow border border-gray-100"
               >
                 <p className="font-medium text-gray-900">
-                  {formatPhoneNumber(tx.msisdn)}
+                  {formatPhoneNumber(tx.beneficiary_msisdn)}
                 </p>
-                <p className="text-sm text-gray-600 mt-1">
-                  <span className="font-semibold">GB:</span> {tx.gig || "N/A"}
+
+                {tx.beneficiary_msisdn &&
+                  tx.ussd_msisdn &&
+                  tx.beneficiary_msisdn !== tx.ussd_msisdn && (
+                    <p className="text-sm text-gray-600 mt-0.5">
+                      Paid by: {formatPhoneNumber(tx.ussd_msisdn)}
+                    </p>
+                  )}
+
+                <p className="text-sm text-gray-600 mt-2">
+                  <span className="font-semibold">Bundle:</span>{" "}
+                  {tx.gig || tx.serviceName || "N/A"}
                 </p>
+
                 <p className="text-sm text-gray-600 mt-1">
                   <span className="font-semibold">Amount:</span> GH₵
-                  {tx.amount || "N/A"}
+                  {tx.amount !== "N/A" ? Number(tx.amount).toFixed(2) : "N/A"}
                 </p>
-                {tx.externalRef && (
-                  <p className="text-xs text-gray-500 mt-2 truncate">
-                    Ref: {tx.externalRef}
-                  </p>
-                )}
+
+                <p className="text-xs text-gray-500 mt-3 truncate">
+                  Ref: {tx.transaction_id}
+                </p>
               </div>
             ))}
           </div>
@@ -86,7 +94,7 @@ const UssdTransactionsTab = ({
             <button
               onClick={onPrevPage}
               disabled={ussdPage === 1}
-              className={`px-5 py-2 rounded-lg font-medium transition ${
+              className={`px-6 py-2 rounded-lg font-medium transition ${
                 ussdPage === 1
                   ? "bg-gray-200 text-gray-500 cursor-not-allowed"
                   : "bg-blue-600 text-white hover:bg-blue-700"
@@ -100,7 +108,7 @@ const UssdTransactionsTab = ({
             <button
               onClick={onNextPage}
               disabled={!hasMoreUssd}
-              className={`px-5 py-2 rounded-lg font-medium transition ${
+              className={`px-6 py-2 rounded-lg font-medium transition ${
                 !hasMoreUssd
                   ? "bg-gray-200 text-gray-500 cursor-not-allowed"
                   : "bg-blue-600 text-white hover:bg-blue-700"
