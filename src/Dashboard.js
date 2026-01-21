@@ -38,6 +38,22 @@ const downloadExcel = (data, fileName, headers) => {
 };
 
 /* ------------------------------------------------------------------ */
+/*  Stable date helpers (created once)                                */
+/* ------------------------------------------------------------------ */
+const now = new Date();
+const todayStart = new Date(now.setHours(0, 0, 0, 0));
+const todayEnd = new Date(todayStart);
+todayEnd.setDate(todayEnd.getDate() + 1);
+
+const yesterdayStart = new Date(todayStart);
+yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+const yesterdayEnd = new Date(yesterdayStart);
+yesterdayEnd.setDate(yesterdayEnd.getDate() + 1);
+
+const last7Start = new Date(todayStart);
+last7Start.setDate(last7Start.getDate() - 7);
+
+/* ------------------------------------------------------------------ */
 /*  Dashboard component                                               */
 /* ------------------------------------------------------------------ */
 const Dashboard = () => {
@@ -74,92 +90,10 @@ const Dashboard = () => {
   const maxExportRecords = 1000;
   const batchSize = 500;
 
-  // Date helpers
-  const now = new Date();
-  const todayStart = new Date(now.setHours(0, 0, 0, 0));
-  const todayEnd = new Date(todayStart);
-  todayEnd.setDate(todayEnd.getDate() + 1);
-
-  const yesterdayStart = new Date(todayStart);
-  yesterdayStart.setDate(yesterdayStart.getDate() - 1);
-  const yesterdayEnd = new Date(yesterdayStart);
-  yesterdayEnd.setDate(yesterdayEnd.getDate() + 1);
-
-  const last7Start = new Date(todayStart);
-  last7Start.setDate(last7Start.getDate() - 7);
-
   /* ----------------------- Tab handling ---------------------- */
   const handleTabChange = (newValue) => {
     setTabValue(newValue);
     setError(null);
-  };
-
-  /* -------------------------- Revenue Fetch ------------------- */
-  const fetchRevenueStats = async () => {
-    setLoading(true);
-    try {
-      // Today
-      const todayQuery = query(
-        collection(db, "rickyRevenue"),
-        where("createdAt", ">=", todayStart),
-        where("createdAt", "<", todayEnd),
-      );
-      const todaySnap = await getDocs(todayQuery);
-      let todayTotal = 0;
-      todaySnap.forEach((doc) => {
-        todayTotal += Number(doc.data().amount || 0);
-      });
-      setTodayRevenue(todayTotal);
-      setTodayCount(todaySnap.size);
-
-      // Yesterday
-      const yesterdayQuery = query(
-        collection(db, "rickyRevenue"),
-        where("createdAt", ">=", yesterdayStart),
-        where("createdAt", "<", yesterdayEnd),
-      );
-      const yesterdaySnap = await getDocs(yesterdayQuery);
-      let yesterdayTotal = 0;
-      yesterdaySnap.forEach((doc) => {
-        yesterdayTotal += Number(doc.data().amount || 0);
-      });
-      setYesterdayRevenue(yesterdayTotal);
-      setYesterdayCount(yesterdaySnap.size);
-
-      // Last 7 days
-      const last7Query = query(
-        collection(db, "rickyRevenue"),
-        where("createdAt", ">=", last7Start),
-        where("createdAt", "<", todayEnd),
-      );
-      const last7Snap = await getDocs(last7Query);
-      let last7Total = 0;
-      last7Snap.forEach((doc) => {
-        last7Total += Number(doc.data().amount || 0);
-      });
-      setLast7DaysRevenue(last7Total);
-      setLast7DaysCount(last7Snap.size);
-
-      // Custom range
-      if (customStartDate && customEndDate) {
-        const customQuery = query(
-          collection(db, "rickyRevenue"),
-          where("createdAt", ">=", customStartDate),
-          where("createdAt", "<=", customEndDate),
-        );
-        const customSnap = await getDocs(customQuery);
-        let customTotal = 0;
-        customSnap.forEach((doc) => {
-          customTotal += Number(doc.data().amount || 0);
-        });
-        setCustomRevenue(customTotal);
-        setCustomCount(customSnap.size);
-      }
-    } catch (e) {
-      setError("Failed to load revenue data: " + e.message);
-    } finally {
-      setLoading(false);
-    }
   };
 
   /* -------------------------- Fetchers (Website & USSD) ------ */
@@ -400,11 +334,91 @@ const Dashboard = () => {
 
   /* -------------------------- Effects -------------------------- */
   useEffect(() => {
+    // ────────────────────────────────────────────────────────────────
+    // Tab 0: Revenue (all logic inside effect – no external refs)
+    // ────────────────────────────────────────────────────────────────
     if (tabValue === 0) {
-      fetchRevenueStats();
-    } else if (tabValue === 1) {
+      const loadRevenue = async () => {
+        setLoading(true);
+        try {
+          // Today
+          const todayQuery = query(
+            collection(db, "rickyRevenue"),
+            where("createdAt", ">=", todayStart),
+            where("createdAt", "<", todayEnd),
+          );
+          const todaySnap = await getDocs(todayQuery);
+          let todayTotal = 0;
+          todaySnap.forEach((doc) => {
+            todayTotal += Number(doc.data().amount || 0);
+          });
+          setTodayRevenue(todayTotal);
+          setTodayCount(todaySnap.size);
+
+          // Yesterday
+          const yesterdayQuery = query(
+            collection(db, "rickyRevenue"),
+            where("createdAt", ">=", yesterdayStart),
+            where("createdAt", "<", yesterdayEnd),
+          );
+          const yesterdaySnap = await getDocs(yesterdayQuery);
+          let yesterdayTotal = 0;
+          yesterdaySnap.forEach((doc) => {
+            yesterdayTotal += Number(doc.data().amount || 0);
+          });
+          setYesterdayRevenue(yesterdayTotal);
+          setYesterdayCount(yesterdaySnap.size);
+
+          // Last 7 days
+          const last7Query = query(
+            collection(db, "rickyRevenue"),
+            where("createdAt", ">=", last7Start),
+            where("createdAt", "<", todayEnd),
+          );
+          const last7Snap = await getDocs(last7Query);
+          let last7Total = 0;
+          last7Snap.forEach((doc) => {
+            last7Total += Number(doc.data().amount || 0);
+          });
+          setLast7DaysRevenue(last7Total);
+          setLast7DaysCount(last7Snap.size);
+
+          // Custom range
+          if (customStartDate && customEndDate) {
+            const customQuery = query(
+              collection(db, "rickyRevenue"),
+              where("createdAt", ">=", customStartDate),
+              where("createdAt", "<=", customEndDate),
+            );
+            const customSnap = await getDocs(customQuery);
+            let customTotal = 0;
+            customSnap.forEach((doc) => {
+              customTotal += Number(doc.data().amount || 0);
+            });
+            setCustomRevenue(customTotal);
+            setCustomCount(customSnap.size);
+          }
+        } catch (e) {
+          setError("Failed to load revenue data: " + e.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      loadRevenue();
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // Tab 1: Website Transactions
+    // ────────────────────────────────────────────────────────────────
+    else if (tabValue === 1) {
       fetchTransactions();
-    } else if (tabValue === 2) {
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // Tab 2: USSD Transactions
+    // ────────────────────────────────────────────────────────────────
+    else if (tabValue === 2) {
       fetchUssdTransactions();
     }
   }, [tabValue, customStartDate, customEndDate]);
@@ -568,7 +582,30 @@ const Dashboard = () => {
                     />
                   </div>
                   <button
-                    onClick={fetchRevenueStats}
+                    onClick={() => {
+                      const loadCustom = async () => {
+                        setLoading(true);
+                        try {
+                          const customQuery = query(
+                            collection(db, "rickyRevenue"),
+                            where("createdAt", ">=", customStartDate),
+                            where("createdAt", "<=", customEndDate),
+                          );
+                          const customSnap = await getDocs(customQuery);
+                          let customTotal = 0;
+                          customSnap.forEach((doc) => {
+                            customTotal += Number(doc.data().amount || 0);
+                          });
+                          setCustomRevenue(customTotal);
+                          setCustomCount(customSnap.size);
+                        } catch (e) {
+                          setError("Failed to load custom range: " + e.message);
+                        } finally {
+                          setLoading(false);
+                        }
+                      };
+                      if (customStartDate && customEndDate) loadCustom();
+                    }}
                     disabled={!customStartDate || !customEndDate}
                     className={`px-6 py-2 rounded-lg font-medium transition ${
                       customStartDate && customEndDate
