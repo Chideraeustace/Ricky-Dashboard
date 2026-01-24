@@ -11,7 +11,6 @@ import { db } from "./firebase";
 import * as XLSX from "xlsx";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
-
 import WebsiteTransactionsTab from "./components/WebsiteTransactionsTab";
 import UssdTransactionsTab from "./components/UssdTransactionsTab";
 
@@ -23,13 +22,11 @@ const formatPhoneNumber = (number) => {
   const cleaned = number.toString().replace(/^233/, "").trim();
   return cleaned.length === 9 ? `0${cleaned}` : cleaned || "N/A";
 };
-
 const extractGB = (desc) => {
   if (!desc) return "N/A";
   const m = desc.match(/(\d+)GB/i);
   return m ? m[1] : "N/A";
 };
-
 const downloadExcel = (data, fileName, headers) => {
   const ws = XLSX.utils.json_to_sheet(data, { header: headers });
   const wb = XLSX.utils.book_new();
@@ -44,12 +41,10 @@ const now = new Date();
 const todayStart = new Date(now.setHours(0, 0, 0, 0));
 const todayEnd = new Date(todayStart);
 todayEnd.setDate(todayEnd.getDate() + 1);
-
 const yesterdayStart = new Date(todayStart);
 yesterdayStart.setDate(yesterdayStart.getDate() - 1);
 const yesterdayEnd = new Date(yesterdayStart);
 yesterdayEnd.setDate(yesterdayEnd.getDate() + 1);
-
 const last7Start = new Date(todayStart);
 last7Start.setDate(last7Start.getDate() - 7);
 
@@ -58,34 +53,40 @@ last7Start.setDate(last7Start.getDate() - 7);
 /* ------------------------------------------------------------------ */
 const Dashboard = () => {
   const [tabValue, setTabValue] = useState(0);
-
   const [transactions, setTransactions] = useState([]);
   const [ussdTransactions, setUssdTransactions] = useState([]);
-
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-
   const [transactionsPage, setTransactionsPage] = useState(1);
   const [ussdPage, setUssdPage] = useState(1);
   const [hasMoreTransactions, setHasMoreTransactions] = useState(true);
   const [hasMoreUssd, setHasMoreUssd] = useState(true);
 
-  // Revenue states
+  // Revenue states (rickyRevenue)
   const [todayRevenue, setTodayRevenue] = useState(0);
   const [todayCount, setTodayCount] = useState(0);
   const [yesterdayRevenue, setYesterdayRevenue] = useState(0);
   const [yesterdayCount, setYesterdayCount] = useState(0);
   const [last7DaysRevenue, setLast7DaysRevenue] = useState(0);
   const [last7DaysCount, setLast7DaysCount] = useState(0);
-  const [customStartDate, setCustomStartDate] = useState(null);
-  const [customEndDate, setCustomEndDate] = useState(null);
   const [customRevenue, setCustomRevenue] = useState(0);
   const [customCount, setCustomCount] = useState(0);
 
+  // ACN Orders revenue states
+  const [todayACNRevenue, setTodayACNRevenue] = useState(0);
+  const [todayACNCount, setTodayACNCount] = useState(0);
+  const [yesterdayACNRevenue, setYesterdayACNRevenue] = useState(0);
+  const [yesterdayACNCount, setYesterdayACNCount] = useState(0);
+  const [last7ACNRevenue, setLast7ACNRevenue] = useState(0);
+  const [last7ACNCount, setLast7ACNCount] = useState(0);
+  const [customACNRevenue, setCustomACNRevenue] = useState(0);
+  const [customACNCount, setCustomACNCount] = useState(0);
+
+  const [customStartDate, setCustomStartDate] = useState(null);
+  const [customEndDate, setCustomEndDate] = useState(null);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [confirmAction, setConfirmAction] = useState(null);
   const [recordCount, setRecordCount] = useState(0);
-
   const pageSize = 6;
   const maxExportRecords = 1000;
   const batchSize = 500;
@@ -124,7 +125,6 @@ const Dashboard = () => {
         where("exported", "==", false),
       );
       const snap = await getDocs(q);
-
       const result = snap.docs.map((d) => {
         const row = d.data();
         return {
@@ -143,11 +143,9 @@ const Dashboard = () => {
           createdAt: row.createdAt,
         };
       });
-
       const startIdx = (ussdPage - 1) * pageSize;
       const endIdx = startIdx + pageSize;
       const pageData = result.slice(startIdx, endIdx);
-
       setUssdTransactions(pageData);
       setHasMoreUssd(endIdx < result.length);
     } catch (e) {
@@ -181,14 +179,11 @@ const Dashboard = () => {
         );
         const snap = await getDocs(q);
         const docs = snap.docs.slice(0, maxExportRecords);
-
         const data = docs.map((d) => ({
           Number: formatPhoneNumber(d.data().recipientNumber),
           GB: extractGB(d.data().serviceName) || "N/A",
         }));
-
         setRecordCount(docs.length);
-
         for (let i = 0; i < docs.length; i += batchSize) {
           const batch = writeBatch(db);
           docs
@@ -196,7 +191,6 @@ const Dashboard = () => {
             .forEach((d) => batch.update(d.ref, { exported: true }));
           await batch.commit();
         }
-
         downloadExcel(data, "Transactions", ["Number", "GB"]);
         await fetchTransactions();
       } catch (e) {
@@ -217,12 +211,10 @@ const Dashboard = () => {
         );
         const snap = await getDocs(q);
         const docs = snap.docs.slice(0, maxExportRecords);
-
         const data = docs.map((d) => {
           const row = d.data();
           const amount =
             typeof row.amount === "number" ? row.amount.toFixed(2) : "N/A";
-
           let gb = row.gig || "N/A";
           if (gb === "N/A") {
             if (row.serviceName) {
@@ -233,7 +225,6 @@ const Dashboard = () => {
               if (match) gb = match[1] + "GB";
             }
           }
-
           return {
             Number: formatPhoneNumber(
               row.beneficiary_msisdn || row.subscriber_number,
@@ -245,22 +236,18 @@ const Dashboard = () => {
             Service: row.serviceName || row.desc || "—",
           };
         });
-
         setRecordCount(docs.length);
-
         for (let i = 0; i < docs.length; i += batchSize) {
           const batchDocs = docs.slice(i, i + batchSize);
           const batch = writeBatch(db);
           batchDocs.forEach((d) => batch.update(d.ref, { exported: true }));
           await batch.commit();
         }
-
         downloadExcel(
           data,
           "UssdTransactions_" + new Date().toISOString().slice(0, 10),
           ["Number", "GB", "Amount", "Ref", "Network", "Service"],
         );
-
         await fetchUssdTransactions();
       } catch (e) {
         setError("USSD export failed: " + e.message);
@@ -334,9 +321,6 @@ const Dashboard = () => {
 
   /* -------------------------- Effects -------------------------- */
   useEffect(() => {
-    // ────────────────────────────────────────────────────────────────
-    // Tab 0: Revenue (all logic inside effect – no external refs)
-    // ────────────────────────────────────────────────────────────────
     if (tabValue === 0) {
       const loadRevenue = async () => {
         setLoading(true);
@@ -404,22 +388,80 @@ const Dashboard = () => {
           setLoading(false);
         }
       };
-
       loadRevenue();
-    }
-
-    // ────────────────────────────────────────────────────────────────
-    // Tab 1: Website Transactions
-    // ────────────────────────────────────────────────────────────────
-    else if (tabValue === 1) {
+    } else if (tabValue === 1) {
       fetchTransactions();
-    }
-
-    // ────────────────────────────────────────────────────────────────
-    // Tab 2: USSD Transactions
-    // ────────────────────────────────────────────────────────────────
-    else if (tabValue === 2) {
+    } else if (tabValue === 2) {
       fetchUssdTransactions();
+    } else if (tabValue === 3) {
+      const loadACNRevenue = async () => {
+        setLoading(true);
+        try {
+          // Today
+          const todayQ = query(
+            collection(db, "ACN-orders"),
+            where("status", "==", "completed"),
+            where("createdAt", ">=", todayStart),
+            where("createdAt", "<", todayEnd),
+          );
+          const todaySnap = await getDocs(todayQ);
+          let total = 0;
+          todaySnap.forEach((doc) => {
+            total += Number(doc.data().amount || 0);
+          });
+          setTodayACNRevenue(total);
+          setTodayACNCount(todaySnap.size);
+
+          // Yesterday
+          const yesterdayQ = query(
+            collection(db, "ACN-orders"),
+            where("status", "==", "completed"),
+            where("createdAt", ">=", yesterdayStart),
+            where("createdAt", "<", yesterdayEnd),
+          );
+          const ySnap = await getDocs(yesterdayQ);
+          let yTotal = 0;
+          ySnap.forEach((doc) => (yTotal += Number(doc.data().amount1 || 0)));
+          setYesterdayACNRevenue(yTotal);
+          setYesterdayACNCount(ySnap.size);
+
+          // Last 7 days
+          const last7Q = query(
+            collection(db, "ACN-orders"),
+            where("status", "==", "completed"),
+            where("createdAt", ">=", last7Start),
+            where("createdAt", "<", todayEnd),
+          );
+          const last7Snap = await getDocs(last7Q);
+          let l7Total = 0;
+          last7Snap.forEach(
+            (doc) => (l7Total += Number(doc.data().amount1 || 0)),
+          );
+          setLast7ACNRevenue(l7Total);
+          setLast7ACNCount(last7Snap.size);
+
+          // Custom range
+          if (customStartDate && customEndDate) {
+            const customQ = query(
+              collection(db, "ACN-orders"),
+              where("status", "==", "completed"),
+              where("createdAt", ">=", customStartDate),
+              where("createdAt", "<=", customEndDate),
+            );
+            const cSnap = await getDocs(customQ);
+            let cTotal = 0;
+            cSnap.forEach((doc) => (cTotal += Number(doc.data().amount1 || 0)));
+            setCustomACNRevenue(cTotal);
+            setCustomACNCount(cSnap.size);
+          }
+        } catch (err) {
+          setError("Failed to load ACN orders revenue: " + err.message);
+          console.log(err.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+      loadACNRevenue();
     }
   }, [tabValue, customStartDate, customEndDate]);
 
@@ -466,21 +508,24 @@ const Dashboard = () => {
 
       {/* Tabs */}
       <div className="flex flex-wrap border-b border-gray-300 bg-white rounded-lg shadow-sm mb-6">
-        {["Revenue", "Website Transactions", "USSD Transactions"].map(
-          (label, i) => (
-            <button
-              key={i}
-              className={`flex-1 px-4 py-3 text-sm font-semibold transition-colors duration-200 sm:text-base ${
-                tabValue === i
-                  ? "border-b-4 border-blue-600 text-blue-600 bg-blue-50"
-                  : "text-gray-600 hover:text-blue-600 hover:bg-gray-50"
-              }`}
-              onClick={() => handleTabChange(i)}
-            >
-              {label}
-            </button>
-          ),
-        )}
+        {[
+          "Revenue",
+          "Website Transactions",
+          "USSD Transactions",
+          "ACN Orders",
+        ].map((label, i) => (
+          <button
+            key={i}
+            className={`flex-1 px-4 py-3 text-sm font-semibold transition-colors duration-200 sm:text-base ${
+              tabValue === i
+                ? "border-b-4 border-blue-600 text-blue-600 bg-blue-50"
+                : "text-gray-600 hover:text-blue-600 hover:bg-gray-50"
+            }`}
+            onClick={() => handleTabChange(i)}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
       {/* Revenue Tab */}
@@ -489,17 +534,14 @@ const Dashboard = () => {
           <h2 className="text-2xl font-bold text-gray-800 mb-6">
             Revenue Overview
           </h2>
-
           {loading && (
             <div className="flex justify-center py-8">
               <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-blue-600"></div>
             </div>
           )}
-
           {error && (
             <p className="text-center text-red-600 font-medium mb-6">{error}</p>
           )}
-
           {!loading && !error && (
             <>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
@@ -514,7 +556,6 @@ const Dashboard = () => {
                     {todayCount} transaction{todayCount !== 1 ? "s" : ""}
                   </p>
                 </div>
-
                 <div className="bg-white rounded-xl shadow-lg p-6">
                   <h3 className="text-lg font-semibold text-gray-700 mb-2">
                     Yesterday
@@ -527,7 +568,6 @@ const Dashboard = () => {
                     {yesterdayCount !== 1 ? "s" : ""}
                   </p>
                 </div>
-
                 <div className="bg-white rounded-xl shadow-lg p-6">
                   <h3 className="text-lg font-semibold text-gray-700 mb-2">
                     Last 7 Days
@@ -616,7 +656,6 @@ const Dashboard = () => {
                     Calculate
                   </button>
                 </div>
-
                 {customStartDate && customEndDate && (
                   <div className="mt-4 p-4 bg-gray-50 rounded-lg">
                     <p className="text-base font-medium text-gray-800">
@@ -628,6 +667,130 @@ const Dashboard = () => {
                     </p>
                     <p className="text-sm text-gray-600">
                       {customCount} transaction{customCount !== 1 ? "s" : ""}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ACN Orders Tab */}
+      {tabValue === 3 && (
+        <div className="mt-6">
+          <h2 className="text-2xl font-bold text-gray-800 mb-6">
+            ACN Orders Revenue (Completed)
+          </h2>
+          {loading && (
+            <div className="flex justify-center py-8">
+              <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-blue-600"></div>
+            </div>
+          )}
+          {error && (
+            <p className="text-center text-red-600 font-medium mb-6">{error}</p>
+          )}
+          {!loading && !error && (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                <div className="bg-white rounded-xl shadow-lg p-6">
+                  <h3 className="text-lg font-semibold text-gray-700 mb-2">
+                    Today
+                  </h3>
+                  <div className="text-3xl font-bold text-green-600">
+                    GH₵ {todayACNRevenue.toFixed(2)}
+                  </div>
+                  <p className="text-sm text-gray-600 mt-1">
+                    {todayACNCount} order{todayACNCount !== 1 ? "s" : ""}
+                  </p>
+                </div>
+                <div className="bg-white rounded-xl shadow-lg p-6">
+                  <h3 className="text-lg font-semibold text-gray-700 mb-2">
+                    Yesterday
+                  </h3>
+                  <div className="text-3xl font-bold text-green-600">
+                    GH₵ {yesterdayACNRevenue.toFixed(2)}
+                  </div>
+                  <p className="text-sm text-gray-600 mt-1">
+                    {yesterdayACNCount} order
+                    {yesterdayACNCount !== 1 ? "s" : ""}
+                  </p>
+                </div>
+                <div className="bg-white rounded-xl shadow-lg p-6">
+                  <h3 className="text-lg font-semibold text-gray-700 mb-2">
+                    Last 7 Days
+                  </h3>
+                  <div className="text-3xl font-bold text-green-600">
+                    GH₵ {last7ACNRevenue.toFixed(2)}
+                  </div>
+                  <p className="text-sm text-gray-600 mt-1">
+                    {last7ACNCount} order{last7ACNCount !== 1 ? "s" : ""}
+                  </p>
+                </div>
+              </div>
+
+              {/* Custom Date Range - reused from Revenue tab */}
+              <div className="bg-white rounded-xl shadow-lg p-6">
+                <h3 className="text-lg font-semibold text-gray-700 mb-4">
+                  Custom Date Range
+                </h3>
+                <div className="flex flex-col sm:flex-row gap-4 items-end mb-6">
+                  <div className="flex-1">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Start Date
+                    </label>
+                    <DatePicker
+                      selected={customStartDate}
+                      onChange={(date) => setCustomStartDate(date)}
+                      selectsStart
+                      startDate={customStartDate}
+                      endDate={customEndDate}
+                      maxDate={new Date()}
+                      dateFormat="yyyy-MM-dd"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholderText="Select start date"
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      End Date
+                    </label>
+                    <DatePicker
+                      selected={customEndDate}
+                      onChange={(date) => setCustomEndDate(date)}
+                      selectsEnd
+                      startDate={customStartDate}
+                      endDate={customEndDate}
+                      minDate={customStartDate}
+                      maxDate={new Date()}
+                      dateFormat="yyyy-MM-dd"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholderText="Select end date"
+                    />
+                  </div>
+                  <button
+                    onClick={() => handleTabChange(3)} // Just reload the tab to recalculate
+                    disabled={!customStartDate || !customEndDate}
+                    className={`px-6 py-2 rounded-lg font-medium transition ${
+                      customStartDate && customEndDate
+                        ? "bg-blue-600 text-white hover:bg-blue-700"
+                        : "bg-gray-300 text-gray-500 cursor-not-allowed"
+                    }`}
+                  >
+                    Calculate
+                  </button>
+                </div>
+                {customStartDate && customEndDate && (
+                  <div className="mt-4 p-4 bg-gray-50 rounded-lg">
+                    <p className="text-base font-medium text-gray-800">
+                      From {customStartDate.toLocaleDateString("en-GB")} to{" "}
+                      {customEndDate.toLocaleDateString("en-GB")}:
+                    </p>
+                    <p className="text-2xl font-bold text-green-600 mt-2">
+                      GH₵ {customACNRevenue.toFixed(2)}
+                    </p>
+                    <p className="text-sm text-gray-600">
+                      {customACNCount} order{customACNCount !== 1 ? "s" : ""}
                     </p>
                   </div>
                 )}
@@ -649,7 +812,6 @@ const Dashboard = () => {
           onDownload={handleDownloadTransactions}
         />
       )}
-
       {tabValue === 2 && (
         <UssdTransactionsTab
           ussdTransactions={ussdTransactions}
