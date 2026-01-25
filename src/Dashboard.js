@@ -421,7 +421,7 @@ const Dashboard = () => {
           );
           const ySnap = await getDocs(yesterdayQ);
           let yTotal = 0;
-          ySnap.forEach((doc) => (yTotal += Number(doc.data().amount1 || 0)));
+          ySnap.forEach((doc) => (yTotal += Number(doc.data().amount || 0)));
           setYesterdayACNRevenue(yTotal);
           setYesterdayACNCount(ySnap.size);
 
@@ -435,7 +435,7 @@ const Dashboard = () => {
           const last7Snap = await getDocs(last7Q);
           let l7Total = 0;
           last7Snap.forEach(
-            (doc) => (l7Total += Number(doc.data().amount1 || 0)),
+            (doc) => (l7Total += Number(doc.data().amount || 0)),
           );
           setLast7ACNRevenue(l7Total);
           setLast7ACNCount(last7Snap.size);
@@ -450,7 +450,7 @@ const Dashboard = () => {
             );
             const cSnap = await getDocs(customQ);
             let cTotal = 0;
-            cSnap.forEach((doc) => (cTotal += Number(doc.data().amount1 || 0)));
+            cSnap.forEach((doc) => (cTotal += Number(doc.data().amount || 0)));
             setCustomACNRevenue(cTotal);
             setCustomACNCount(cSnap.size);
           }
